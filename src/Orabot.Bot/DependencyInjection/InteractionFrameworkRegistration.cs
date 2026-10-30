@@ -22,7 +22,8 @@ namespace Orabot.Bot.DependencyInjection
 				// The host-owned queue provides concurrency; SDK execution stays awaited until its scope is finished.
 				DefaultRunMode = RunMode.Sync,
 				AutoServiceScopes = true,
-				EnableAutocompleteHandlers = true
+				// Explicit autocomplete commands own their bounded response; automatic type handlers do not.
+				EnableAutocompleteHandlers = false
 			}));
 			services.AddSingleton<ApplicationCommandCatalog>();
 			services.AddTransient(typeof(Lazy<>), typeof(DeferredDependency<>));

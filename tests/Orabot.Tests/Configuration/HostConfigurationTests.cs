@@ -72,7 +72,7 @@ public sealed class HostConfigurationTests
 		var constructed = false;
 		var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
 		builder.Configuration.AddInMemoryCollection(values);
-		builder.Services.AddOrabotOptions(builder.Configuration);
+		builder.Services.AddOrabotOptions(builder.Configuration).AddDocumentationFeature(builder.Configuration);
 		builder.Services.AddSingleton<IHostedService>(_ =>
 		{
 			constructed = true;
@@ -122,21 +122,23 @@ public sealed class HostConfigurationTests
 	[Fact]
 	public void Hosting_and_readers_share_one_documentation_worker()
 	{
-		var configuration = new ConfigurationBuilder().AddInMemoryCollection(ValidValues()).Build();
-		using var services = new ServiceCollection().AddLogging().AddSingleton<IConfiguration>(configuration)
-			.AddOrabot(configuration).BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
+		var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+		builder.Configuration.AddInMemoryCollection(ValidValues());
+		builder.Services.AddOrabot(builder.Configuration);
+		using var host = builder.Build();
+		var services = host.Services;
 		OrabotConfiguration.Validate(services);
 		var hosted = services.GetServices<IHostedService>().ToArray();
-		Assert.Equal(3, hosted.Length);
+		Assert.Equal(4, hosted.Length);
 		Assert.IsType<global::Orabot.Bot.Discord.Bot>(hosted[0]);
-		Assert.Same(services.GetRequiredService<DocsCachingService>(), hosted[1]);
-		Assert.IsType<ResourceCenterMapWatcherService>(hosted[2]);
+		Assert.Same(services.GetRequiredService<DocsCachingService>(), hosted[2]);
+		Assert.IsType<ResourceCenterMapWatcherService>(hosted[3]);
 	}
 
 	static ServiceProvider OptionsServices(Dictionary<string, string?> values)
 	{
 		var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
-		return new ServiceCollection().AddOrabotOptions(configuration).BuildServiceProvider();
+		return new ServiceCollection().AddLogging().AddOrabotOptions(configuration).AddDocumentationFeature(configuration).BuildServiceProvider();
 	}
 
 	static Dictionary<string, string?> ValidValues()

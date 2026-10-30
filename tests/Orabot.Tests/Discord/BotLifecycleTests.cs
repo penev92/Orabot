@@ -133,7 +133,7 @@ namespace Orabot.Tests.Discord
 			{
 				var handlers = new NoOpHandlers();
 				Bot = new DiscordBot(_client, Commands, new EmptyServices(), Array.Empty<BaseTypeReader>(),
-					new ModuleBase<SocketCommandContext>[] { new LifecycleProbeModule() }, handlers, handlers, handlers, handlers, handlers,
+					new ModuleBase<SocketCommandContext>[] { new LifecycleProbeModule() }, handlers, handlers, handlers, handlers,
 					Readiness, Options.Create(new DiscordBotOptions { BotToken = "synthetic-test-token" }), NullLogger<DiscordBot>.Instance, Connection);
 			}
 
@@ -161,14 +161,14 @@ namespace Orabot.Tests.Discord
 			public Task LogoutAsync() { Calls.Add("logout"); return Task.CompletedTask; }
 		}
 
-		private sealed class NoOpHandlers : ILogEventHandler, IMessageEventHandler, IReactionEventHandler, ISlashCommandEventHandler, IAutocompleteEventHandler
+		private sealed class NoOpHandlers : ILogEventHandler, IMessageEventHandler, IReactionEventHandler, IInteractionDispatcher
 		{
 			public Task Log(LogMessage message) => Task.CompletedTask;
 			public Task HandleMessageReceivedAsync(SocketMessage message) => Task.CompletedTask;
 			public Task HandleReactionAddedAsync(Cacheable<IUserMessage, ulong> message, Cacheable<IMessageChannel, ulong> channel, SocketReaction reaction) => Task.CompletedTask;
 			public Task HandleReactionRemovedAsync(Cacheable<IUserMessage, ulong> message, Cacheable<IMessageChannel, ulong> channel, SocketReaction reaction) => Task.CompletedTask;
-			public Task HandleSlashCommandAsync(SocketSlashCommand command) => Task.CompletedTask;
-			public Task HandleAutocompleteAsync(SocketAutocompleteInteraction interaction) => Task.CompletedTask;
+			public Task InitializeAsync(IServiceProvider services, CancellationToken cancellationToken) => Task.CompletedTask;
+			public Task HandleInteractionAsync(SocketInteraction interaction) => Task.CompletedTask;
 		}
 	}
 

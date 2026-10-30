@@ -15,7 +15,6 @@ namespace Orabot.Bot.Infrastructure.Configuration
 			var failures = new List<string>();
 
 			ValidateUrl(options.GitHubIconsBaseUrl, nameof(options.GitHubIconsBaseUrl), failures);
-			ValidateUrl(options.OpenRaFaviconUrl, nameof(options.OpenRaFaviconUrl), failures);
 			ValidateConfigured(options.TrustedRoles, nameof(options.TrustedRoles), failures);
 			ValidateConfigured(options.FreelyAssignedRoles, nameof(options.FreelyAssignedRoles), failures);
 
@@ -27,10 +26,6 @@ namespace Orabot.Bot.Infrastructure.Configuration
 
 			ValidatePath(options.LogStorageFolder, nameof(options.LogStorageFolder), failures);
 			ValidatePath(options.ReplayStorageFolder, nameof(options.ReplayStorageFolder), failures);
-			ValidatePages(options.Traits, nameof(options.Traits), failures);
-			ValidatePages(options.Weapons, nameof(options.Weapons), failures);
-			ValidatePages(options.Lua, nameof(options.Lua), failures);
-			ValidatePages(options.SpriteSequences, nameof(options.SpriteSequences), failures);
 
 			return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
 		}
@@ -50,12 +45,6 @@ namespace Orabot.Bot.Infrastructure.Configuration
 				failures.Add(key);
 		}
 
-		static void ValidatePages(LegacyDocumentationPageOptions? pages, string section, List<string> failures)
-		{
-			ValidateUrl(pages?.ReleasePageUrl, section + ":ReleasePageUrl", failures);
-			ValidateUrl(pages?.PlaytestPageUrl, section + ":PlaytestPageUrl", failures);
-			ValidateUrl(pages?.DevelopmentPageUrl, section + ":DevelopmentPageUrl", failures);
-		}
 
 		static void ValidatePath(string? value, string key, List<string> failures)
 		{

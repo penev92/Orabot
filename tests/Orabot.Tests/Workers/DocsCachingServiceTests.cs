@@ -181,7 +181,7 @@ namespace Orabot.Tests.Workers
 
 		private static DocsCachingService CreateWorker(FakeDocsApi api, WorkerTestClock clock,
 			WorkerFailureState? failures = null, ILogger<DocsCachingService>? logger = null) =>
-			new DocsCachingService(api, Options.Create(new DocumentationCacheOptions { ScanInterval = 300000 }),
+			new DocsCachingService(new DocumentationCatalog(), api, Options.Create(new DocumentationCacheOptions { ScanInterval = 300000 }),
 				logger ?? NullLogger<DocsCachingService>.Instance, clock, failures ?? new WorkerFailureState());
 
 		private static async Task RefreshSuccessfullyAsync(DocsCachingService worker, WorkerTestClock clock)

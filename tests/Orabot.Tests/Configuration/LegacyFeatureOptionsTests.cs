@@ -28,8 +28,6 @@ namespace Orabot.Tests.Configuration
 
 			Assert.Equal("Trusted", options.TrustedRoles);
 			Assert.Equal("0", options.RoleAssignmentMessageId);
-			Assert.Equal("https://example.org/traits/release", options.Traits.ReleasePageUrl);
-			Assert.Equal("https://example.org/sprite-sequences/development", options.SpriteSequences.DevelopmentPageUrl);
 			Assert.True(validator.Validate(null, options).Succeeded);
 		}
 
@@ -174,23 +172,18 @@ namespace Orabot.Tests.Configuration
 			var configuration = ValidConfiguration();
 			configuration["RoleAssignmentMessageId"] = "private-id";
 			configuration["FreelyAssignedRolesByEmote"] = "private-mapping";
-			configuration["Traits:ReleasePageUrl"] = "private-url";
 			configuration["ReplayStorageFolder"] = "private-path\0";
 
 			var result = validator.Validate(null, Bind(configuration));
 
 			Assert.True(result.Failed);
-			Assert.Equal(new[] { "FreelyAssignedRolesByEmote", "ReplayStorageFolder", "RoleAssignmentMessageId", "Traits:ReleasePageUrl" },
+			Assert.Equal(new[] { "FreelyAssignedRolesByEmote", "ReplayStorageFolder", "RoleAssignmentMessageId" },
 				result.Failures.OrderBy(key => key, StringComparer.Ordinal));
 		}
 
 		public static IEnumerable<object[]> UrlKeys()
 		{
 			yield return new object[] { "GitHubIconsBaseUrl" };
-			yield return new object[] { "OpenRaFaviconUrl" };
-			foreach (var section in new[] { "Traits", "Weapons", "Lua", "SpriteSequences" })
-				foreach (var page in new[] { "ReleasePageUrl", "PlaytestPageUrl", "DevelopmentPageUrl" })
-					yield return new object[] { section + ":" + page };
 		}
 
 		public static IEnumerable<object?[]> InvalidStoragePaths()
@@ -211,7 +204,6 @@ namespace Orabot.Tests.Configuration
 			var values = new Dictionary<string, string?>
 			{
 				["GitHubIconsBaseUrl"] = "https://example.org/icons/",
-				["OpenRaFaviconUrl"] = "https://example.org/favicon.ico",
 				["TrustedRoles"] = "Trusted",
 				["RoleAssignmentMessageId"] = "0",
 				["FreelyAssignedRolesByEmote"] = "happy:Players;helper:Helpers",
@@ -219,13 +211,6 @@ namespace Orabot.Tests.Configuration
 				["LogStorageFolder"] = "synthetic-data/logs",
 				["ReplayStorageFolder"] = "synthetic-data/replays"
 			};
-			foreach (var section in new[] { "Traits", "Weapons", "Lua", "SpriteSequences" })
-			{
-				var segment = section == "SpriteSequences" ? "sprite-sequences" : section.ToLowerInvariant();
-				values[section + ":ReleasePageUrl"] = "https://example.org/" + segment + "/release";
-				values[section + ":PlaytestPageUrl"] = "https://example.org/" + segment + "/playtest";
-				values[section + ":DevelopmentPageUrl"] = "https://example.org/" + segment + "/development";
-			}
 			return values;
 		}
 

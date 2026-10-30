@@ -26,8 +26,7 @@ namespace Orabot.Bot.Discord
 		private readonly ILogEventHandler _logEventHandler;
 		private readonly IMessageEventHandler _messageEventHandler;
 		private readonly IReactionEventHandler _reactionEventHandler;
-		private readonly ISlashCommandEventHandler _slashCommandHandler;
-		private readonly IAutocompleteEventHandler _autocompleteHandler;
+		private readonly IInteractionDispatcher _interactionDispatcher;
 		private readonly DiscordReadiness _readiness;
 		private readonly DiscordBotOptions _options;
 		private readonly ILogger<Bot> _logger;
@@ -48,13 +47,12 @@ namespace Orabot.Bot.Discord
 			ILogEventHandler logEventHandler,
 			IMessageEventHandler messageEventHandler,
 			IReactionEventHandler reactionEventHandler,
-			ISlashCommandEventHandler slashCommandHandler,
-			IAutocompleteEventHandler autocompleteHandler,
+			IInteractionDispatcher interactionDispatcher,
 			DiscordReadiness readiness,
 			IOptions<DiscordBotOptions> options,
 			ILogger<Bot> logger)
 			: this(client, commands, moduleServices, typeReaders, modules, logEventHandler,
-				messageEventHandler, reactionEventHandler, slashCommandHandler, autocompleteHandler,
+				messageEventHandler, reactionEventHandler, interactionDispatcher,
 				readiness, options, logger, new DiscordConnectionLifecycle(client))
 		{
 		}
@@ -68,8 +66,7 @@ namespace Orabot.Bot.Discord
 			ILogEventHandler logEventHandler,
 			IMessageEventHandler messageEventHandler,
 			IReactionEventHandler reactionEventHandler,
-			ISlashCommandEventHandler slashCommandHandler,
-			IAutocompleteEventHandler autocompleteHandler,
+			IInteractionDispatcher interactionDispatcher,
 			DiscordReadiness readiness,
 			IOptions<DiscordBotOptions> options,
 			ILogger<Bot> logger,
@@ -83,8 +80,7 @@ namespace Orabot.Bot.Discord
 			_logEventHandler = logEventHandler;
 			_messageEventHandler = messageEventHandler;
 			_reactionEventHandler = reactionEventHandler;
-			_slashCommandHandler = slashCommandHandler;
-			_autocompleteHandler = autocompleteHandler;
+			_interactionDispatcher = interactionDispatcher;
 			_readiness = readiness;
 			_options = options.Value;
 			_logger = logger;
@@ -111,6 +107,7 @@ namespace Orabot.Bot.Discord
 					await _commands.AddModuleAsync(module.GetType(), _moduleServices);
 				}
 
+				await _interactionDispatcher.InitializeAsync(_moduleServices, cancellationToken);
 				cancellationToken.ThrowIfCancellationRequested();
 				_shutdownRequired = true;
 				_logger.LogInformation("Starting the Discord connection.");
@@ -189,8 +186,7 @@ namespace Orabot.Bot.Discord
 			_client.ReactionAdded += _reactionEventHandler.HandleReactionAddedAsync;
 			_client.ReactionRemoved += _reactionEventHandler.HandleReactionRemovedAsync;
 			_client.MessageReceived += _messageEventHandler.HandleMessageReceivedAsync;
-			_client.SlashCommandExecuted += _slashCommandHandler.HandleSlashCommandAsync;
-			_client.AutocompleteExecuted += _autocompleteHandler.HandleAutocompleteAsync;
+			_client.InteractionCreated += _interactionDispatcher.HandleInteractionAsync;
 			_client.Connected += OnConnectedAsync;
 			_client.Disconnected += OnDisconnectedAsync;
 			_client.Ready += OnReadyAsync;
@@ -207,8 +203,7 @@ namespace Orabot.Bot.Discord
 			_client.ReactionAdded -= _reactionEventHandler.HandleReactionAddedAsync;
 			_client.ReactionRemoved -= _reactionEventHandler.HandleReactionRemovedAsync;
 			_client.MessageReceived -= _messageEventHandler.HandleMessageReceivedAsync;
-			_client.SlashCommandExecuted -= _slashCommandHandler.HandleSlashCommandAsync;
-			_client.AutocompleteExecuted -= _autocompleteHandler.HandleAutocompleteAsync;
+			_client.InteractionCreated -= _interactionDispatcher.HandleInteractionAsync;
 			_client.Connected -= OnConnectedAsync;
 			_client.Disconnected -= OnDisconnectedAsync;
 			_client.Ready -= OnReadyAsync;

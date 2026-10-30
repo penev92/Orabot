@@ -20,9 +20,6 @@ using Orabot.Bot.Discord.Interactions;
 using Orabot.Bot.Discord.Logging;
 using Orabot.Bot.Discord.Messages;
 using Orabot.Bot.Features.Documentation;
-using Orabot.Bot.Features.Documentation.Autocomplete;
-using Orabot.Bot.Features.Documentation.Commands;
-using Orabot.Bot.Features.Documentation.Rendering;
 using Orabot.Bot.Features.General;
 using Orabot.Bot.Features.GitHubReferences.Messages;
 using Orabot.Bot.Features.Logs;
@@ -53,12 +50,13 @@ namespace Orabot.Bot.DependencyInjection
 					MessageCacheSize = provider.GetRequiredService<IOptions<DiscordBotOptions>>().Value.MessageCacheSize
 				}))
 				.AddSingleton<CommandService>()
+				.AddInteractionFrameworkMetadata(provider => provider.GetRequiredService<DiscordSocketClient>().Rest)
+				.AddSingleton<InteractionWorkQueue>()
+				.AddSingleton<IInteractionDispatcher, InteractionDispatcher>()
 				.AddSingleton<BaseTypeReader, UriTypeReader>()
 				.AddSingleton<BaseTypeReader, DiscordMessageIdentifierTypeReader>()
 				.AddDefaultEventHandlerServices()
 				.AddDefaultCustomMessageHandlers()
-				.AddDefaultSlashCommandHandlers()
-				.AddDefaultAutocompletionHandlers()
 				.AddSingleton<ModuleBase<SocketCommandContext>, GeneralModule>()
 				.AddSingleton<ModuleBase<SocketCommandContext>, QuoteModule>()
 				.AddSingleton<ModuleBase<SocketCommandContext>, RoleManagementModule>()
@@ -71,7 +69,7 @@ namespace Orabot.Bot.DependencyInjection
 					return new RestClient(new RestClientOptions(),
 						configureSerialization: s => s.UseSystemTextJson(serializationOptions));
 				})
-				.AddDocumentationWebsiteIntegration()
+				.AddDocumentationFeature(configuration)
 				.AddResourceCenterIntegration()
 				.AddYamlDeserializer()
 				.AddSingleton(TimeProvider.System)
@@ -79,6 +77,7 @@ namespace Orabot.Bot.DependencyInjection
 				.AddSingleton<DiscordReadiness>()
 				// Reverse stop order lets polling workers finish before the connection is closed.
 				.AddHostedService<global::Orabot.Bot.Discord.Bot>()
+				.AddHostedService(provider => provider.GetRequiredService<InteractionWorkQueue>())
 				.AddLongRunningServices();
 		}
 
@@ -93,11 +92,6 @@ namespace Orabot.Bot.DependencyInjection
 				.Validate(options => !string.IsNullOrWhiteSpace(options.BotToken), "BotToken must be configured.")
 				.Validate(options => options.MessageCacheSize >= 0 && options.MessageCacheSize <= 10000,
 					"MessageCacheSize must be between 0 and 10000.")
-				.ValidateOnStart();
-			services.AddOptions<DocumentationCacheOptions>()
-				.Configure(options => options.ScanInterval = ReadInt<DocumentationCacheOptions>(configuration,
-					"DocsSearchIndex:ScanInterval", options.ScanInterval))
-				.Validate(options => options.ScanInterval > 0, "DocsSearchIndex:ScanInterval must be positive milliseconds.")
 				.ValidateOnStart();
 			services.AddOptions<MapAnnouncerOptions>()
 				.Configure(options =>
@@ -120,9 +114,7 @@ namespace Orabot.Bot.DependencyInjection
 			return serviceCollection
 				.AddSingleton<ILogEventHandler, LogEventHandler>()
 				.AddSingleton<IMessageEventHandler, MessageEventHandler>()
-				.AddSingleton<IReactionEventHandler, RoleAssignmentReactionEventHandler>()
-				.AddSingleton<ISlashCommandEventHandler, SlashCommandEventHandler>()
-				.AddSingleton<IAutocompleteEventHandler, AutocompleteEventHandler>();
+				.AddSingleton<IReactionEventHandler, RoleAssignmentReactionEventHandler>();
 		}
 
 		public static IServiceCollection AddDefaultCustomMessageHandlers(this IServiceCollection serviceCollection)
@@ -143,35 +135,12 @@ namespace Orabot.Bot.DependencyInjection
 				.AddSingleton<ICustomMessageHandler, StackTraceMessageHandler>();
 		}
 
-		public static IServiceCollection AddDefaultSlashCommandHandlers(this IServiceCollection serviceCollection)
-		{
-			return serviceCollection
-				.AddSingleton<ISlashCommandHandler, OpenRaInformationCommandHandler>()
-				.AddSingleton<ISlashCommandHandler, LuaDocumentationCommandHandler>()
-				.AddSingleton<ISlashCommandHandler, TraitDocumentationCommandHandler>()
-				.AddSingleton<ISlashCommandHandler, WeaponDocumentationCommandHandler>()
-				.AddSingleton<ISlashCommandHandler, SpriteSequenceDocumentationCommandHandler>();
-		}
-
-		public static IServiceCollection AddDefaultAutocompletionHandlers(this IServiceCollection serviceCollection)
-		{
-			return serviceCollection
-				.AddSingleton<IAutocompleteHandler, LuaTableNamesAutocompleteHandler>()
-				.AddSingleton<IAutocompleteHandler, SpriteSequenceNamesAutocompleteHandler>()
-				.AddSingleton<IAutocompleteHandler, TraitNamesAutocompleteHandler>()
-				.AddSingleton<IAutocompleteHandler, WeaponNamesAutocompleteHandler>();
-		}
-
 		public static IServiceCollection AddDefaultTransformers(this IServiceCollection serviceCollection)
 		{
 			return serviceCollection
 				.AddSingleton<AttachmentLogFileToMessageTransformer>()
 				.AddSingleton<OpenRaResourceCenterMapLinkToEmbedTransformer>()
 				.AddSingleton<AttachmentReplayMetadataTransformer>()
-				.AddSingleton<TraitToEmbedTransformer>()
-				.AddSingleton<WeaponToEmbedTransformer>()
-				.AddSingleton<LuaTableToEmbedTransformer>()
-				.AddSingleton<SpriteSequenceToEmbedTransformer>()
 				.AddSingleton<ReplayMetadataToEmbedTransformer>();
 		}
 
@@ -188,30 +157,8 @@ namespace Orabot.Bot.DependencyInjection
 		public static IServiceCollection AddLongRunningServices(this IServiceCollection serviceCollection)
 		{
 			return serviceCollection
-				.AddSingleton<DocsCachingService>()
 				.AddHostedService(provider => provider.GetRequiredService<DocsCachingService>())
 				.AddHostedService<ResourceCenterMapWatcherService>();
-		}
-
-		public static IServiceCollection AddDocumentationWebsiteIntegration(this IServiceCollection serviceCollection)
-		{
-			var serializerOptions = new JsonSerializerOptions();
-			var settings = new RefitSettings
-			{
-				ContentSerializer = new SystemTextJsonContentSerializer(serializerOptions)
-			};
-
-			serviceCollection
-				.AddRefitClient<IDocsApi>(settings)
-				.ConfigureHttpClient(c =>
-				{
-					c.BaseAddress = new Uri("https://docs.openra.net/en/");
-					c.Timeout = TimeSpan.FromSeconds(30);
-				})
-				.ConfigurePrimaryHttpMessageHandler(CreatePollingHandler)
-				.SetHandlerLifetime(Timeout.InfiniteTimeSpan);
-
-			return serviceCollection;
 		}
 
 		public static IServiceCollection AddResourceCenterIntegration(this IServiceCollection serviceCollection)
