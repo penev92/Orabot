@@ -1,7 +1,8 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
 namespace Orabot.Bot.Features.Documentation.Models
 {
+	/// <summary>Represents one entry in the OpenRA documentation search-index response.</summary>
 	public class DocsEntry
 	{
 		[JsonPropertyName("location")]
