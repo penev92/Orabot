@@ -1,9 +1,20 @@
-﻿using System;
-using System.IO;
+using System;
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
+using Discord;
+using Discord.Commands;
+using Discord.WebSocket;
+using Orabot.Bot.Discord;
+using Orabot.Bot.Features.Quotes;
+using Orabot.Bot.Infrastructure.Configuration;
+using RestSharp;
+using RestSharp.Serializers.Json;
+using System.Net.Http;
+using System.Threading;
 using Orabot.Bot.Discord.Commands;
 using Orabot.Bot.Discord.Interactions;
 using Orabot.Bot.Discord.Logging;
@@ -25,20 +36,83 @@ using Orabot.Bot.Infrastructure.Serialization;
 using Refit;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.Converters;
-using System.Linq;
 
 namespace Orabot.Bot.DependencyInjection
 {
 	public static class ServiceCollectionExtensions
 	{
-		public static IServiceCollection AddAppSettingsConfiguration(this IServiceCollection serviceCollection)
+		public static IServiceCollection AddOrabot(this IServiceCollection services, IConfiguration configuration)
 		{
-			return serviceCollection
-				.AddSingleton<IConfiguration>(provider => new ConfigurationBuilder()
-						.SetBasePath(Directory.GetCurrentDirectory())
-						.AddJsonFile("appsettings.json")
-						.AddUserSecrets("245384e8-58dc-45d7-b441-5c63468071e4")
-						.Build());
+			return services
+				.AddOrabotOptions(configuration)
+				.AddSingleton(provider => new DiscordSocketClient(new DiscordSocketConfig
+				{
+					GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMessages |
+						GatewayIntents.GuildMessageReactions | GatewayIntents.DirectMessages |
+						GatewayIntents.DirectMessageReactions | GatewayIntents.MessageContent,
+					MessageCacheSize = provider.GetRequiredService<IOptions<DiscordBotOptions>>().Value.MessageCacheSize
+				}))
+				.AddSingleton<CommandService>()
+				.AddSingleton<BaseTypeReader, UriTypeReader>()
+				.AddSingleton<BaseTypeReader, DiscordMessageIdentifierTypeReader>()
+				.AddDefaultEventHandlerServices()
+				.AddDefaultCustomMessageHandlers()
+				.AddDefaultSlashCommandHandlers()
+				.AddDefaultAutocompletionHandlers()
+				.AddSingleton<ModuleBase<SocketCommandContext>, GeneralModule>()
+				.AddSingleton<ModuleBase<SocketCommandContext>, QuoteModule>()
+				.AddSingleton<ModuleBase<SocketCommandContext>, RoleManagementModule>()
+				.AddSingleton<QuotingService>()
+				.AddDefaultTransformers()
+				.AddSingleton<IRestClient>(_ =>
+				{
+					var serializationOptions = new JsonSerializerOptions();
+					serializationOptions.Converters.Add(new CustomDateTimeConverter());
+					return new RestClient(new RestClientOptions(),
+						configureSerialization: s => s.UseSystemTextJson(serializationOptions));
+				})
+				.AddDocumentationWebsiteIntegration()
+				.AddResourceCenterIntegration()
+				.AddYamlDeserializer()
+				.AddSingleton(TimeProvider.System)
+				.AddSingleton<WorkerFailureState>()
+				.AddSingleton<DiscordReadiness>()
+				// Reverse stop order lets polling workers finish before the connection is closed.
+				.AddHostedService<global::Orabot.Bot.Discord.Bot>()
+				.AddLongRunningServices();
+		}
+
+		public static IServiceCollection AddOrabotOptions(this IServiceCollection services, IConfiguration configuration)
+		{
+			services.AddOptions<DiscordBotOptions>()
+				.Configure(options =>
+				{
+					options.BotToken = configuration["BotToken"];
+					options.MessageCacheSize = ReadInt<DiscordBotOptions>(configuration, "MessageCacheSize", options.MessageCacheSize);
+				})
+				.Validate(options => !string.IsNullOrWhiteSpace(options.BotToken), "BotToken must be configured.")
+				.Validate(options => options.MessageCacheSize >= 0 && options.MessageCacheSize <= 10000,
+					"MessageCacheSize must be between 0 and 10000.")
+				.ValidateOnStart();
+			services.AddOptions<DocumentationCacheOptions>()
+				.Configure(options => options.ScanInterval = ReadInt<DocumentationCacheOptions>(configuration,
+					"DocsSearchIndex:ScanInterval", options.ScanInterval))
+				.Validate(options => options.ScanInterval > 0, "DocsSearchIndex:ScanInterval must be positive milliseconds.")
+				.ValidateOnStart();
+			services.AddOptions<MapAnnouncerOptions>()
+				.Configure(options =>
+				{
+					options.ServerName = configuration["MapAnnouncer:ServerName"];
+					options.ChannelName = configuration["MapAnnouncer:ChannelName"];
+					options.ScanInterval = ReadInt<MapAnnouncerOptions>(configuration, "MapAnnouncer:ScanInterval", options.ScanInterval);
+				})
+				.Validate(options => !string.IsNullOrWhiteSpace(options.ServerName), "MapAnnouncer:ServerName must be configured.")
+				.Validate(options => !string.IsNullOrWhiteSpace(options.ChannelName), "MapAnnouncer:ChannelName must be configured.")
+				.Validate(options => options.ScanInterval > 0, "MapAnnouncer:ScanInterval must be positive milliseconds.")
+				.ValidateOnStart();
+			services.AddSingleton<IValidateOptions<LegacyFeatureOptions>, LegacyFeatureOptionsValidator>();
+			services.AddOptions<LegacyFeatureOptions>().Bind(configuration).ValidateOnStart();
+			return services;
 		}
 
 		public static IServiceCollection AddDefaultEventHandlerServices(this IServiceCollection serviceCollection)
@@ -72,7 +146,6 @@ namespace Orabot.Bot.DependencyInjection
 		public static IServiceCollection AddDefaultSlashCommandHandlers(this IServiceCollection serviceCollection)
 		{
 			return serviceCollection
-				.AddSingleton(provider => provider.GetServices<ILongRunningService>().Single(x => x is DocsCachingService) as DocsCachingService)
 				.AddSingleton<ISlashCommandHandler, OpenRaInformationCommandHandler>()
 				.AddSingleton<ISlashCommandHandler, LuaDocumentationCommandHandler>()
 				.AddSingleton<ISlashCommandHandler, TraitDocumentationCommandHandler>()
@@ -115,8 +188,9 @@ namespace Orabot.Bot.DependencyInjection
 		public static IServiceCollection AddLongRunningServices(this IServiceCollection serviceCollection)
 		{
 			return serviceCollection
-				.AddSingleton<ILongRunningService, DocsCachingService>()
-				.AddSingleton<ILongRunningService, ResourceCenterMapWatcherService>();
+				.AddSingleton<DocsCachingService>()
+				.AddHostedService(provider => provider.GetRequiredService<DocsCachingService>())
+				.AddHostedService<ResourceCenterMapWatcherService>();
 		}
 
 		public static IServiceCollection AddDocumentationWebsiteIntegration(this IServiceCollection serviceCollection)
@@ -129,7 +203,13 @@ namespace Orabot.Bot.DependencyInjection
 
 			serviceCollection
 				.AddRefitClient<IDocsApi>(settings)
-				.ConfigureHttpClient(c => c.BaseAddress = new Uri("https://docs.openra.net/en/"));
+				.ConfigureHttpClient(c =>
+				{
+					c.BaseAddress = new Uri("https://docs.openra.net/en/");
+					c.Timeout = TimeSpan.FromSeconds(30);
+				})
+				.ConfigurePrimaryHttpMessageHandler(CreatePollingHandler)
+				.SetHandlerLifetime(Timeout.InfiniteTimeSpan);
 
 			return serviceCollection;
 		}
@@ -146,9 +226,33 @@ namespace Orabot.Bot.DependencyInjection
 
 			serviceCollection
 				.AddRefitClient<IMapsApi>(settings)
-				.ConfigureHttpClient(c => c.BaseAddress = new Uri("https://resource.openra.net"));
+				.ConfigureHttpClient(c =>
+				{
+					c.BaseAddress = new Uri("https://resource.openra.net");
+					c.Timeout = TimeSpan.FromSeconds(30);
+				})
+				.ConfigurePrimaryHttpMessageHandler(CreatePollingHandler)
+				.SetHandlerLifetime(Timeout.InfiniteTimeSpan);
 
 			return serviceCollection;
 		}
+		private static int ReadInt<TOptions>(IConfiguration configuration, string key, int defaultValue)
+		{
+			var value = configuration[key];
+			if (value == null)
+				return defaultValue;
+			if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result))
+				return result;
+			throw new OptionsValidationException(Options.DefaultName, typeof(TOptions),
+				new[] { key + " must be a 32-bit integer." });
+		}
+
+		// Singleton polling services intentionally keep their typed clients. Renew connections
+		// within the handler so DNS changes are respected throughout the process lifetime.
+		private static HttpMessageHandler CreatePollingHandler() => new SocketsHttpHandler
+		{
+			PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+		};
+
 	}
 }

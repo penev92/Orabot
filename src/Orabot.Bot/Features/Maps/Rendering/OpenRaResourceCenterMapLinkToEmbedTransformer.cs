@@ -1,6 +1,7 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Discord;
 using Orabot.Bot.Features.Maps.Models;
@@ -21,43 +22,43 @@ namespace Orabot.Bot.Features.Maps.Rendering
 			_restClient = restClient;
 		}
 
-		internal async Task<Embed> CreateEmbed(string mapUid)
+		internal async Task<Embed> CreateEmbed(string mapUid, CancellationToken cancellationToken = default)
 		{
 			var request = new RestRequest($"{BaseUrl}/{ApiMapInfoByUidTemplate}");
 			request.AddUrlSegment("uid", mapUid);
 
-			var response = await _restClient.GetAsync<List<MapInfo>>(request);
+			var response = await _restClient.GetAsync<List<MapInfo>>(request, cancellationToken);
 			var mapInfo = response?.FirstOrDefault();
 
-			return await CreateEmbedInner(mapInfo);
+			return await CreateEmbedInner(mapInfo, cancellationToken);
 		}
 
-		internal async Task<Embed> CreateEmbed(int number)
+		internal async Task<Embed> CreateEmbed(int number, CancellationToken cancellationToken = default)
 		{
 			var request = new RestRequest($"{BaseUrl}/{ApiMapInfoByNumberTemplate}");
 			request.AddUrlSegment("number", number);
 
-			var response = await _restClient.GetAsync<List<MapInfo>>(request);
+			var response = await _restClient.GetAsync<List<MapInfo>>(request, cancellationToken);
 			var mapInfo = response?.FirstOrDefault();
 
-			return await CreateEmbedInner(mapInfo);
+			return await CreateEmbedInner(mapInfo, cancellationToken);
 		}
 
-		internal async Task<Embed> CreateEmbed(MapInfo mapInfo)
+		internal async Task<Embed> CreateEmbed(MapInfo mapInfo, CancellationToken cancellationToken = default)
 		{
-			return await CreateEmbedInner(mapInfo);
+			return await CreateEmbedInner(mapInfo, cancellationToken);
 		}
 
 		#region Private methods
 
-		private async Task<Embed> CreateEmbedInner(MapInfo mapInfo)
+		private async Task<Embed> CreateEmbedInner(MapInfo mapInfo, CancellationToken cancellationToken)
 		{
 			if (mapInfo?.Title == null || mapInfo.Author == null)
 				return null;
 
 			var bounds = mapInfo.Bounds.Split(',').Select(int.Parse).ToArray();
 			var size = $"{bounds[2]}x{bounds[3]}";
-			var color = await GetColor($"mod_{mapInfo.GameMod}");
+			var color = await GetColor($"mod_{mapInfo.GameMod}", cancellationToken);
 			var number = mapInfo.Id;
 
 			var url = $"{BaseUrl}/maps/{number}";
@@ -86,12 +87,12 @@ namespace Orabot.Bot.Features.Maps.Rendering
 			return embed.Build();
 		}
 
-		private async Task<Color?> GetColor(string modIdentifier)
+		private async Task<Color?> GetColor(string modIdentifier, CancellationToken cancellationToken)
 		{
 			var stylesheetLink = $"{BaseUrl}/static/style003.css";
 
 			var request = new RestRequest(stylesheetLink);
-			var response = await _restClient.GetAsync(request);
+			var response = await _restClient.GetAsync(request, cancellationToken);
 
 			if (response.Content == null || !response.Content.Contains(modIdentifier))
 				return null;

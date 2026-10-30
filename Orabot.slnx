@@ -1,0 +1,14 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/src/">
+    <Project Path="src/Orabot.Bot/Orabot.Bot.csproj" />
+    <Project Path="src/Orabot.Hosts.ConsoleHost/Orabot.Hosts.ConsoleHost.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Orabot.Tests/Orabot.Tests.csproj" />
+  </Folder>
+</Solution>

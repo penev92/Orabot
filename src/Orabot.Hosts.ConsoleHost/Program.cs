@@ -1,60 +1,56 @@
-﻿using BotRuntime = Orabot.Bot.Discord.Bot;
-using Discord;
-using Discord.Commands;
-using Discord.WebSocket;
-using Microsoft.Extensions.DependencyInjection;
-using Orabot.Bot.DependencyInjection;
-using Orabot.Bot.Discord.Commands;
-using Orabot.Bot.Features.General;
-using Orabot.Bot.Features.Quotes;
-using Orabot.Bot.Features.Roles;
-using Orabot.Bot.Infrastructure.Serialization;
-using RestSharp;
-using RestSharp.Serializers.Json;
-using System.Text.Json;
+using System;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Orabot.Bot.DependencyInjection;
+using Orabot.Bot.Infrastructure.BackgroundWork;
 
 namespace Orabot.Hosts.ConsoleHost
 {
-    class Program
-    {
-        static async Task Main(string[] args)
-        {
-			var serviceProvider = new ServiceCollection()
-				.AddAppSettingsConfiguration()
-				.AddSingleton(_ => new DiscordSocketClient(new DiscordSocketConfig
+	internal class Program
+	{
+		static async Task<int> Main(string[] args)
+		{
+			try
+			{
+				var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 				{
-					GatewayIntents = GatewayIntents.AllUnprivileged | GatewayIntents.MessageContent
-				}))
-				.AddSingleton<CommandService>()
-				.AddSingleton<BaseTypeReader, UriTypeReader>()
-				.AddSingleton<BaseTypeReader, DiscordMessageIdentifierTypeReader>()
-				.AddDefaultEventHandlerServices()
-				.AddDefaultCustomMessageHandlers()
-				.AddDefaultSlashCommandHandlers()
-				.AddDefaultAutocompletionHandlers()
-				.AddSingleton<ModuleBase<SocketCommandContext>, GeneralModule>()
-				.AddSingleton<ModuleBase<SocketCommandContext>, QuoteModule>()
-				.AddSingleton<ModuleBase<SocketCommandContext>, RoleManagementModule>()
-				.AddSingleton<QuotingService>()
-				.AddDefaultTransformers()
-				.AddLongRunningServices()
-				.AddSingleton<IRestClient>(_ =>
+					Args = args,
+					ContentRootPath = AppContext.BaseDirectory
+				});
+				OrabotConfiguration.Configure(builder, args);
+				builder.Logging.ClearProviders().AddSimpleConsole(options =>
 				{
-					var serializationOptions = new JsonSerializerOptions();
-					serializationOptions.Converters.Add(new CustomDateTimeConverter());
-
-					return new RestClient(
-					   new RestClientOptions(),
-					   configureSerialization: s => s.UseSystemTextJson(serializationOptions));
-				})
-				.AddDocumentationWebsiteIntegration()
-				.AddResourceCenterIntegration()
-				.AddYamlDeserializer()
-				.BuildServiceProvider();
-
-			using var bot = new BotRuntime(serviceProvider);
-			await bot.RunAsync();
+					options.SingleLine = true;
+					options.UseUtcTimestamp = true;
+					options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss'Z' ";
+				});
+				builder.Services.Configure<HostOptions>(options =>
+				{
+					options.ShutdownTimeout = TimeSpan.FromSeconds(30);
+					options.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.StopHost;
+				});
+				builder.Services.AddOrabot(builder.Configuration);
+				using var host = builder.Build();
+				OrabotConfiguration.Validate(host.Services);
+				var failureState = host.Services.GetRequiredService<WorkerFailureState>();
+				await host.RunAsync();
+				return failureState.HasFailed ? 1 : 0;
+			}
+			catch (OptionsValidationException exception)
+			{
+				foreach (var failure in exception.Failures)
+					Console.Error.WriteLine(failure);
+				return 1;
+			}
+			catch (Exception exception)
+			{
+				// Startup exceptions can contain configuration or transport values.
+				Console.Error.WriteLine($"Orabot could not complete its host lifetime ({exception.GetType().Name}).");
+				return 1;
+			}
 		}
-    }
+	}
 }

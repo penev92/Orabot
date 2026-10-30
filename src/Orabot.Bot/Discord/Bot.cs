@@ -1,137 +1,263 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orabot.Bot.Discord.Commands;
 using Orabot.Bot.Discord.Interactions;
 using Orabot.Bot.Discord.Logging;
 using Orabot.Bot.Discord.Messages;
-using Orabot.Bot.Infrastructure.BackgroundWork;
 
 namespace Orabot.Bot.Discord
 {
-	public class Bot : IDisposable
+	/// <summary>Owns the Discord connection lifetime, but not the container-owned clients.</summary>
+	public sealed class Bot : IHostedService
 	{
-		private readonly IServiceProvider _serviceProvider;
-		private readonly string _discordBotToken;
-		private readonly CancellationTokenSource _cancellationTokenSource;
-		private readonly CancellationToken _cancellationToken;
-
 		private readonly DiscordSocketClient _client;
 		private readonly CommandService _commands;
-
+		private readonly IServiceProvider _moduleServices;
+		private readonly IReadOnlyList<BaseTypeReader> _typeReaders;
+		private readonly IReadOnlyList<ModuleBase<SocketCommandContext>> _modules;
 		private readonly ILogEventHandler _logEventHandler;
 		private readonly IMessageEventHandler _messageEventHandler;
 		private readonly IReactionEventHandler _reactionEventHandler;
 		private readonly ISlashCommandEventHandler _slashCommandHandler;
-		private readonly IAutocompleteEventHandler _autocompleteCommandHandler;
-		private bool _longRunningServicesStarted = false;
+		private readonly IAutocompleteEventHandler _autocompleteHandler;
+		private readonly DiscordReadiness _readiness;
+		private readonly DiscordBotOptions _options;
+		private readonly ILogger<Bot> _logger;
+		private readonly IDiscordConnectionLifecycle _connection;
+		private readonly object _stateSync = new();
+		private bool _startAttempted;
+		private bool _shutdownRequired;
+		private bool _eventsAttached;
+		private bool _hasBeenReady;
+		private bool _stopping;
 
-		public Bot(IServiceProvider serviceProvider)
+		public Bot(
+			DiscordSocketClient client,
+			CommandService commands,
+			IServiceProvider moduleServices,
+			IEnumerable<BaseTypeReader> typeReaders,
+			IEnumerable<ModuleBase<SocketCommandContext>> modules,
+			ILogEventHandler logEventHandler,
+			IMessageEventHandler messageEventHandler,
+			IReactionEventHandler reactionEventHandler,
+			ISlashCommandEventHandler slashCommandHandler,
+			IAutocompleteEventHandler autocompleteHandler,
+			DiscordReadiness readiness,
+			IOptions<DiscordBotOptions> options,
+			ILogger<Bot> logger)
+			: this(client, commands, moduleServices, typeReaders, modules, logEventHandler,
+				messageEventHandler, reactionEventHandler, slashCommandHandler, autocompleteHandler,
+				readiness, options, logger, new DiscordConnectionLifecycle(client))
 		{
-			_serviceProvider = serviceProvider;
-			_discordBotToken = _serviceProvider.GetRequiredService<IConfiguration>()["BotToken"];
-
-			_client = _serviceProvider.GetService<DiscordSocketClient>();
-			_commands = _serviceProvider.GetService<CommandService>();
-			_logEventHandler = _serviceProvider.GetService<ILogEventHandler>();
-			_messageEventHandler = _serviceProvider.GetService<IMessageEventHandler>();
-			_reactionEventHandler = _serviceProvider.GetService<IReactionEventHandler>();
-			_slashCommandHandler = _serviceProvider.GetService<ISlashCommandEventHandler>();
-			_autocompleteCommandHandler = _serviceProvider.GetService<IAutocompleteEventHandler>();
-
-			_cancellationTokenSource = new CancellationTokenSource();
-			_cancellationToken = _cancellationTokenSource.Token;
 		}
 
-		public async Task RunAsync()
+		internal Bot(
+			DiscordSocketClient client,
+			CommandService commands,
+			IServiceProvider moduleServices,
+			IEnumerable<BaseTypeReader> typeReaders,
+			IEnumerable<ModuleBase<SocketCommandContext>> modules,
+			ILogEventHandler logEventHandler,
+			IMessageEventHandler messageEventHandler,
+			IReactionEventHandler reactionEventHandler,
+			ISlashCommandEventHandler slashCommandHandler,
+			IAutocompleteEventHandler autocompleteHandler,
+			DiscordReadiness readiness,
+			IOptions<DiscordBotOptions> options,
+			ILogger<Bot> logger,
+			IDiscordConnectionLifecycle connection)
 		{
+			_client = client;
+			_commands = commands;
+			_moduleServices = moduleServices;
+			_typeReaders = typeReaders.ToArray();
+			_modules = modules.ToArray();
+			_logEventHandler = logEventHandler;
+			_messageEventHandler = messageEventHandler;
+			_reactionEventHandler = reactionEventHandler;
+			_slashCommandHandler = slashCommandHandler;
+			_autocompleteHandler = autocompleteHandler;
+			_readiness = readiness;
+			_options = options.Value;
+			_logger = logger;
+			_connection = connection;
+		}
+
+		public async Task StartAsync(CancellationToken cancellationToken)
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+			if (_startAttempted)
+				throw new InvalidOperationException("The Discord hosted service can only be started once.");
+
+			_startAttempted = true;
 			AttachEventHandlers();
-			await RegisterCommandModules();
+			try
+			{
+				foreach (var typeReader in _typeReaders)
+					_commands.AddTypeReader(typeReader.SupportedType, typeReader);
 
-			await _client.LoginAsync(TokenType.Bot, _discordBotToken);
-			await _client.StartAsync();
+				foreach (var module in _modules)
+				{
+					cancellationToken.ThrowIfCancellationRequested();
+					// Discord.Net needs a provider to activate command modules; other dependencies are explicit.
+					await _commands.AddModuleAsync(module.GetType(), _moduleServices);
+				}
 
-			Console.ReadLine();
+				cancellationToken.ThrowIfCancellationRequested();
+				_shutdownRequired = true;
+				_logger.LogInformation("Starting the Discord connection.");
+				await _connection.LoginAsync(_options.BotToken);
+				cancellationToken.ThrowIfCancellationRequested();
+				await _connection.StartAsync();
+				cancellationToken.ThrowIfCancellationRequested();
+			}
+			catch (Exception startupException)
+			{
+				MarkStopping();
+				try
+				{
+					await ShutdownConnectionAsync();
+				}
+				catch (Exception exception)
+				{
+					_logger.LogWarning("Discord cleanup after failed startup failed with {ExceptionType}.", exception.GetType().FullName);
+				}
+				finally
+				{
+					DetachEventHandlers();
+				}
+				if (startupException is OperationCanceledException && cancellationToken.IsCancellationRequested)
+					throw;
 
-			await _client.LogoutAsync();
-			await _client.StopAsync();
-
-			Console.WriteLine("Done");
-			Console.ReadLine();
+				// Generic Host logs escaped exceptions before the console entry point can
+				// handle them. Do not attach the original SDK exception or its payload.
+				throw new InvalidOperationException($"Discord startup failed with {startupException.GetType().FullName}.");
+			}
 		}
 
-		public void Dispose()
+		public async Task StopAsync(CancellationToken cancellationToken)
 		{
-			_cancellationTokenSource.Cancel();
-			((IDisposable)_commands)?.Dispose();
-			_client?.Dispose();
+			MarkStopping();
+			try
+			{
+				// Discord.Net's stop/logout APIs do not accept cancellation. Await them so the
+				// container cannot dispose a client while an abandoned shutdown still uses it.
+				await ShutdownConnectionAsync();
+			}
+			catch (Exception shutdownException)
+			{
+				if (shutdownException is OperationCanceledException && cancellationToken.IsCancellationRequested)
+					throw;
+
+				throw new InvalidOperationException($"Discord shutdown failed with {shutdownException.GetType().FullName}.");
+			}
+			finally
+			{
+				DetachEventHandlers();
+			}
 		}
 
-		#region Private methods
+		private async Task ShutdownConnectionAsync()
+		{
+			if (!_shutdownRequired)
+				return;
+
+			_shutdownRequired = false;
+			_logger.LogInformation("Stopping the Discord connection.");
+			try
+			{
+				await _connection.StopAsync();
+			}
+			finally
+			{
+				await _connection.LogoutAsync();
+			}
+		}
 
 		private void AttachEventHandlers()
 		{
 			_client.Log += _logEventHandler.Log;
+			_commands.Log += _logEventHandler.Log;
 			_client.ReactionAdded += _reactionEventHandler.HandleReactionAddedAsync;
 			_client.ReactionRemoved += _reactionEventHandler.HandleReactionRemovedAsync;
 			_client.MessageReceived += _messageEventHandler.HandleMessageReceivedAsync;
 			_client.SlashCommandExecuted += _slashCommandHandler.HandleSlashCommandAsync;
-			_client.AutocompleteExecuted += _autocompleteCommandHandler.HandleAutocompleteAsync;
-			_client.Ready += OnReady;
+			_client.AutocompleteExecuted += _autocompleteHandler.HandleAutocompleteAsync;
+			_client.Connected += OnConnectedAsync;
+			_client.Disconnected += OnDisconnectedAsync;
+			_client.Ready += OnReadyAsync;
+			_eventsAttached = true;
 		}
 
-		private async Task RegisterCommandModules()
+		private void DetachEventHandlers()
 		{
-			var typeReaders = _serviceProvider.GetServices<BaseTypeReader>();
-			foreach (var typeReader in typeReaders)
-				_commands.AddTypeReader(typeReader.SupportedType, typeReader);
-
-			var modules = _serviceProvider.GetServices<ModuleBase<SocketCommandContext>>();
-			foreach (var module in modules)
-				await _commands.AddModuleAsync(module.GetType(), _serviceProvider);
-		}
-
-		private void StartLongRunningServices()
-		{
-			if (_longRunningServicesStarted)
+			if (!_eventsAttached)
 				return;
 
-			_longRunningServicesStarted = true;
-
-			var services = _serviceProvider.GetServices<ILongRunningService>();
-			foreach (var service in services)
-				Task.Run(() => service.ExecuteAsync(_cancellationToken));
+			_client.Log -= _logEventHandler.Log;
+			_commands.Log -= _logEventHandler.Log;
+			_client.ReactionAdded -= _reactionEventHandler.HandleReactionAddedAsync;
+			_client.ReactionRemoved -= _reactionEventHandler.HandleReactionRemovedAsync;
+			_client.MessageReceived -= _messageEventHandler.HandleMessageReceivedAsync;
+			_client.SlashCommandExecuted -= _slashCommandHandler.HandleSlashCommandAsync;
+			_client.AutocompleteExecuted -= _autocompleteHandler.HandleAutocompleteAsync;
+			_client.Connected -= OnConnectedAsync;
+			_client.Disconnected -= OnDisconnectedAsync;
+			_client.Ready -= OnReadyAsync;
+			_eventsAttached = false;
 		}
 
-		private async Task OnReady()
+		internal Task OnConnectedAsync()
 		{
-			await RegisterSlashCommands();
-			StartLongRunningServices();
+			// A resumed session raises Connected but not Ready. Once initial cache readiness
+			// is established, reopen the gate after either successful gateway handshake.
+			lock (_stateSync)
+			{
+				if (_hasBeenReady && !_stopping)
+					_readiness.MarkReady();
+			}
+			_logger.LogInformation("Discord gateway connected.");
+			return Task.CompletedTask;
 		}
 
-		private async Task RegisterSlashCommands()
+		internal Task OnReadyAsync()
 		{
-			// Uncomment to delete existing commands:
-			//var globalCommands = await _client.GetGlobalApplicationCommandsAsync();
-			//foreach (var guild in _client.Guilds)
-			//{
-			//	var guildCommands = await guild.GetApplicationCommandsAsync();
-			//	foreach (var guildCommand in guildCommands)
-			//		await guildCommand.DeleteAsync();
-			//}
-
-			//// Uncomment to register commands:
-			//var commandBuilders = SlashCommands.CommandBuilders;
-			//foreach (var guild in _client.Guilds)
-			//	foreach (var command in commandBuilders)
-			//		await guild.CreateApplicationCommandAsync(command.Build());
+			lock (_stateSync)
+			{
+				if (!_stopping)
+				{
+					_hasBeenReady = true;
+					_readiness.MarkReady();
+					_logger.LogInformation("Discord initial guild data is ready.");
+				}
+			}
+			// Worker startup and application-command publication are not gateway-event responsibilities.
+			return Task.CompletedTask;
 		}
 
-		#endregion
+		internal Task OnDisconnectedAsync(Exception exception)
+		{
+			lock (_stateSync)
+				_readiness.MarkDisconnected();
+			_logger.LogInformation("Discord gateway disconnected; exception type: {ExceptionType}.", exception?.GetType().FullName ?? "none");
+			return Task.CompletedTask;
+		}
+
+		private void MarkStopping()
+		{
+			lock (_stateSync)
+			{
+				_stopping = true;
+				_readiness.MarkDisconnected();
+			}
+		}
 	}
 }
