@@ -57,11 +57,6 @@ namespace Orabot.Hosts.ConsoleHost
 					options.UseUtcTimestamp = true;
 					options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss'Z' ";
 				});
-				builder.Services.Configure<HostOptions>(options =>
-				{
-					options.ShutdownTimeout = TimeSpan.FromSeconds(30);
-					options.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.StopHost;
-				});
 				builder.Services.AddOrabot(builder.Configuration);
 				using var host = builder.Build();
 				OrabotConfiguration.Validate(host.Services);

@@ -34,7 +34,6 @@ namespace Orabot.Bot.Discord
 		private readonly object _stateSync = new();
 		private bool _startAttempted;
 		private bool _shutdownRequired;
-		private bool _eventsAttached;
 		private bool _hasBeenReady;
 		private bool _stopping;
 
@@ -190,14 +189,10 @@ namespace Orabot.Bot.Discord
 			_client.Connected += OnConnectedAsync;
 			_client.Disconnected += OnDisconnectedAsync;
 			_client.Ready += OnReadyAsync;
-			_eventsAttached = true;
 		}
 
 		private void DetachEventHandlers()
 		{
-			if (!_eventsAttached)
-				return;
-
 			_client.Log -= _logEventHandler.Log;
 			_commands.Log -= _logEventHandler.Log;
 			_client.ReactionAdded -= _reactionEventHandler.HandleReactionAddedAsync;
@@ -207,7 +202,6 @@ namespace Orabot.Bot.Discord
 			_client.Connected -= OnConnectedAsync;
 			_client.Disconnected -= OnDisconnectedAsync;
 			_client.Ready -= OnReadyAsync;
-			_eventsAttached = false;
 		}
 
 		internal Task OnConnectedAsync()

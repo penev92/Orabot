@@ -92,7 +92,7 @@ The Generic Host owns the Discord connection, interaction work queue and both po
 
 Repeated gateway readiness events update connectivity state and never start another worker. Map polling waits for Discord readiness; documentation refresh can warm its cache independently. A complete documentation generation is published atomically, and failed refreshes retain the last good generation.
 
-Polling requests and delays observe cancellation. The host stops polling workers and the interaction queue before closing the Discord connection. It requests cooperative shutdown with a 30-second budget; Discord.Net's stop/logout operations have no cancellation parameter and are awaited. Live transport teardown still needs test-guild verification.
+Polling requests and delays observe cancellation. The host stops polling workers and the interaction queue before closing the Discord connection. The host's default cooperative shutdown budget is 30 seconds; Discord.Net's stop/logout operations have no cancellation parameter and are awaited. Live transport teardown still needs test-guild verification.
 
 Recoverable upstream failures are logged and retried on the configured interval. Unexpected worker failure stops the host and produces a nonzero process exit. SDK and worker diagnostics record safe metadata rather than raw transport payloads or message content.
 
