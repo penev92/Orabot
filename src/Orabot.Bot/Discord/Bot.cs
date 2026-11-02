@@ -107,7 +107,7 @@ namespace Orabot.Bot.Discord
 					await _commands.AddModuleAsync(module.GetType(), _moduleServices);
 				}
 
-				await _interactionDispatcher.InitializeAsync(_moduleServices, cancellationToken);
+				await _interactionDispatcher.InitializeAsync(cancellationToken);
 				cancellationToken.ThrowIfCancellationRequested();
 				_shutdownRequired = true;
 				_logger.LogInformation("Starting the Discord connection.");

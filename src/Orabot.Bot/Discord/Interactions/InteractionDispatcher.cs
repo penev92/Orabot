@@ -5,7 +5,6 @@ using Discord;
 using Discord.Interactions;
 using Discord.WebSocket;
 using Microsoft.Extensions.Logging;
-using Orabot.Bot.Discord.Interactions.Publishing;
 
 namespace Orabot.Bot.Discord.Interactions
 {
@@ -14,27 +13,29 @@ namespace Orabot.Bot.Discord.Interactions
 	{
 		private readonly DiscordSocketClient _client;
 		private readonly InteractionService _interactions;
-		private readonly ApplicationCommandCatalog _catalog;
 		private readonly InteractionWorkQueue _queue;
 		private readonly IServiceProvider _moduleServices;
 		private readonly TimeProvider _clock;
 		private readonly ILogger<InteractionDispatcher> _logger;
 
 		public InteractionDispatcher(DiscordSocketClient client, InteractionService interactions,
-			ApplicationCommandCatalog catalog, InteractionWorkQueue queue, IServiceProvider moduleServices,
+			InteractionWorkQueue queue, IServiceProvider moduleServices,
 			TimeProvider clock, ILogger<InteractionDispatcher> logger)
 		{
 			_client = client;
 			_interactions = interactions;
-			_catalog = catalog;
 			_queue = queue;
 			_moduleServices = moduleServices;
 			_clock = clock;
 			_logger = logger;
 		}
 
-		public Task InitializeAsync(IServiceProvider services, CancellationToken cancellationToken) =>
-			_catalog.InitializeAsync(services, cancellationToken);
+		public async Task InitializeAsync(CancellationToken cancellationToken)
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+			await _interactions.AddModulesAsync(typeof(InteractionDispatcher).Assembly, _moduleServices);
+			cancellationToken.ThrowIfCancellationRequested();
+		}
 
 		public Task HandleInteractionAsync(SocketInteraction interaction) =>
 			HandleAsync(new SocketInteractionContext(_client, interaction));

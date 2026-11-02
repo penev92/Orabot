@@ -23,7 +23,7 @@ public sealed class OpenRaInformationModuleTests
 		using var client = new DiscordSocketClient();
 		using var lifetime = new OfflineHostApplicationLifetime();
 		using var services = new ServiceCollection().AddSingleton<IHostApplicationLifetime>(lifetime)
-			.AddInteractionFrameworkMetadata(client.Rest).BuildServiceProvider();
+			.AddInteractionFramework(client.Rest).BuildServiceProvider();
 		var interactions = services.GetRequiredService<InteractionService>();
 		await interactions.AddModuleAsync<OpenRaInformationModule>(services);
 		var interaction = new OfflineSlashCommandInteraction(command);
@@ -59,7 +59,7 @@ public sealed class OpenRaInformationModuleTests
 		using var client = new DiscordSocketClient();
 		using var lifetime = new OfflineHostApplicationLifetime();
 		using var services = new ServiceCollection().AddSingleton<IHostApplicationLifetime>(lifetime)
-			.AddInteractionFrameworkMetadata(client.Rest).BuildServiceProvider();
+			.AddInteractionFramework(client.Rest).BuildServiceProvider();
 		var interactions = services.GetRequiredService<InteractionService>();
 		await interactions.AddModuleAsync<OpenRaInformationModule>(services);
 		var interaction = new OfflineSlashCommandInteraction("orabot");

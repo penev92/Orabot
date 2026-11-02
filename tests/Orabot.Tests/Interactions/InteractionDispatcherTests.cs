@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Discord;
 using Discord.Interactions;
 using Discord.WebSocket;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -12,8 +13,8 @@ using Orabot.Bot.Features.Documentation.Commands;
 using Orabot.Bot.Features.Documentation.Models;
 using Orabot.Bot.DependencyInjection;
 using Orabot.Bot.Discord.Interactions;
-using Orabot.Bot.Discord.Interactions.Publishing;
 using Orabot.Bot.Infrastructure.BackgroundWork;
+using Orabot.Tests.Documentation;
 
 namespace Orabot.Tests.Interactions;
 
@@ -323,16 +324,15 @@ public sealed class InteractionDispatcherTests
 
 		Fixture(int capacity, TimeProvider clock)
 		{
+			var configuration = new ConfigurationBuilder().AddInMemoryCollection(DocumentationOptionsTests.ValidSettings()).Build();
 			services = new ServiceCollection().AddSingleton<IHostApplicationLifetime>(lifetime)
 				.AddSingleton(State).AddScoped<DispatcherScopedProbe>()
-				.AddSingleton(clock).AddSingleton<DocumentationCatalog>()
+				.AddSingleton(clock).AddDocumentationFeature(configuration)
 				.AddSingleton<ILogger<DocumentationAutocompleteResponder>>(new RecordingLogger<DocumentationAutocompleteResponder>(Logs))
-				.AddSingleton<DocumentationAutocompleteResponder>()
-				.AddInteractionFrameworkMetadata(client.Rest)
+				.AddInteractionFramework(client.Rest)
 				.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
 			Queue = new InteractionWorkQueue(new RecordingLogger<InteractionWorkQueue>(Logs), new WorkerFailureState(), capacity, workerCount: 1);
-			dispatcher = new InteractionDispatcher(client, services.GetRequiredService<InteractionService>(),
-				services.GetRequiredService<ApplicationCommandCatalog>(), Queue, services, clock,
+			dispatcher = new InteractionDispatcher(client, services.GetRequiredService<InteractionService>(), Queue, services, clock,
 				new RecordingLogger<InteractionDispatcher>(Logs));
 		}
 
@@ -444,20 +444,20 @@ public sealed class DispatcherScopedProbe : IDisposable
 public sealed class DispatcherProbeModule : InteractionModuleBase<IInteractionContext>
 {
 	readonly DispatcherProbeState state;
-	readonly Lazy<DispatcherScopedProbe> scoped;
+	readonly IServiceProvider services;
 	readonly IHostApplicationLifetime lifetime;
 
-	public DispatcherProbeModule(DispatcherProbeState state, Lazy<DispatcherScopedProbe> scoped, IHostApplicationLifetime lifetime)
+	public DispatcherProbeModule(DispatcherProbeState state, IServiceProvider services, IHostApplicationLifetime lifetime)
 	{
 		this.state = state;
-		this.scoped = scoped;
+		this.services = services;
 		this.lifetime = lifetime;
 	}
 
 	[SlashCommand("dispatcher-probe", "Offline invocation-scope probe.")]
 	public async Task Probe()
 	{
-		var resource = scoped.Value;
+		var resource = services.GetRequiredService<DispatcherScopedProbe>();
 		state.Executions++;
 		state.AcknowledgedAtExecution = Context.Interaction.HasResponded;
 		state.Entered.TrySetResult();

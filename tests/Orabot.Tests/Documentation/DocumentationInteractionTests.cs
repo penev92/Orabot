@@ -136,7 +136,7 @@ public sealed class DocumentationInteractionTests
 	}
 
 	private static ServiceProvider Services(OfflineHostApplicationLifetime lifetime, DiscordRestClient client) => new ServiceCollection()
-		.AddInteractionFrameworkMetadata(client)
+		.AddInteractionFramework(client)
 		.AddSingleton<IHostApplicationLifetime>(lifetime)
 		.AddSingleton(TimeProvider.System)
 		.AddSingleton<DocumentationCatalog>()

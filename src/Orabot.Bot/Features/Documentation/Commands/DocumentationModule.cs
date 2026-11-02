@@ -3,7 +3,6 @@ using Discord.Interactions;
 using Microsoft.Extensions.Hosting;
 using Orabot.Bot.Features.Documentation.Autocomplete;
 using Orabot.Bot.Features.Documentation.Rendering;
-using System;
 using System.Threading.Tasks;
 
 namespace Orabot.Bot.Features.Documentation.Commands
@@ -13,14 +12,14 @@ namespace Orabot.Bot.Features.Documentation.Commands
 	[CommandContextType(InteractionContextType.Guild, InteractionContextType.BotDm)]
 	public sealed class DocumentationModule : InteractionModuleBase<IInteractionContext>
 	{
-		private readonly Lazy<DocumentationLookupService> _lookup;
-		private readonly Lazy<DocumentationEmbedRenderer> _renderer;
+		private readonly DocumentationLookupService _lookup;
+		private readonly DocumentationEmbedRenderer _renderer;
 		private readonly IHostApplicationLifetime _lifetime;
-		private readonly Lazy<DocumentationAutocompleteResponder> _autocomplete;
+		private readonly DocumentationAutocompleteResponder _autocomplete;
 
-		/// <summary>Defers feature activation until invocation, keeping SDK prototype discovery free of configuration and I/O.</summary>
-		public DocumentationModule(Lazy<DocumentationLookupService> lookup, Lazy<DocumentationEmbedRenderer> renderer,
-			IHostApplicationLifetime lifetime, Lazy<DocumentationAutocompleteResponder> autocomplete)
+		/// <summary>Receives explicit feature services; construction performs no HTTP requests.</summary>
+		public DocumentationModule(DocumentationLookupService lookup, DocumentationEmbedRenderer renderer,
+			IHostApplicationLifetime lifetime, DocumentationAutocompleteResponder autocomplete)
 		{
 			_lookup = lookup;
 			_renderer = renderer;
@@ -72,7 +71,7 @@ namespace Orabot.Bot.Features.Documentation.Commands
 		[AutocompleteCommand(parameterName: "name", commandName: "sprite-sequences")]
 		public Task SpriteSequencesAutocompleteAsync() => CompleteAutocompleteAsync(DocumentationKind.SpriteSequences);
 
-		private Task CompleteAutocompleteAsync(DocumentationKind kind) => _autocomplete.Value.RespondAsync(
+		private Task CompleteAutocompleteAsync(DocumentationKind kind) => _autocomplete.RespondAsync(
 			(IAutocompleteInteraction)Context.Interaction, kind, _lifetime.ApplicationStopping);
 
 		private async Task CompleteAsync(DocumentationKind kind, string name, string version)
@@ -85,8 +84,8 @@ namespace Orabot.Bot.Features.Documentation.Commands
 					new RequestOptions { CancelToken = token });
 				return;
 			}
-			var result = await _lookup.Value.LookupAsync(kind, name, version, token);
-			var embed = _renderer.Value.CreateEmbed(result);
+			var result = await _lookup.LookupAsync(kind, name, version, token);
+			var embed = _renderer.CreateEmbed(result);
 			await Context.Interaction.ModifyOriginalResponseAsync(properties =>
 			{
 				properties.Embeds = new[] { embed };

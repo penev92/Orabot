@@ -50,7 +50,7 @@ namespace Orabot.Bot.DependencyInjection
 					MessageCacheSize = provider.GetRequiredService<IOptions<DiscordBotOptions>>().Value.MessageCacheSize
 				}))
 				.AddSingleton<CommandService>()
-				.AddInteractionFrameworkMetadata(provider => provider.GetRequiredService<DiscordSocketClient>().Rest)
+				.AddInteractionFramework(provider => provider.GetRequiredService<DiscordSocketClient>().Rest)
 				.AddSingleton<InteractionWorkQueue>()
 				.AddSingleton<IInteractionDispatcher, InteractionDispatcher>()
 				.AddSingleton<BaseTypeReader, UriTypeReader>()

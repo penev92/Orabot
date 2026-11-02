@@ -167,7 +167,7 @@ namespace Orabot.Tests.Discord
 			public Task HandleMessageReceivedAsync(SocketMessage message) => Task.CompletedTask;
 			public Task HandleReactionAddedAsync(Cacheable<IUserMessage, ulong> message, Cacheable<IMessageChannel, ulong> channel, SocketReaction reaction) => Task.CompletedTask;
 			public Task HandleReactionRemovedAsync(Cacheable<IUserMessage, ulong> message, Cacheable<IMessageChannel, ulong> channel, SocketReaction reaction) => Task.CompletedTask;
-			public Task InitializeAsync(IServiceProvider services, CancellationToken cancellationToken) => Task.CompletedTask;
+			public Task InitializeAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 			public Task HandleInteractionAsync(SocketInteraction interaction) => Task.CompletedTask;
 		}
 	}
