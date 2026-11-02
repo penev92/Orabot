@@ -110,40 +110,25 @@ Autocomplete responds directly from the in-memory documentation catalog and perf
 
 Named documentation lookups use a ten-second request/body deadline, a four-MiB decoded HTML budget and a per-document nesting limit. An unknown heading retains the family-page fallback. HTTP lookup, catalog refresh and embed rendering have separate responsibilities; rendering performs no network access. Upstream failures complete the deferred command with a clear error.
 
-## Publishing application commands
+## Registering application commands
 
-Normal bot startup loads command metadata for dispatch and **never publishes or deletes commands**. Deployment is explicit:
-
-- `commands export [--global | --guild <id>]` exports the local schema; the default is global. After building, export is entirely offline and needs no configuration or token.
-- `commands plan (--global | --guild <id>) [--prune]` reads the selected Discord scope and prints the proposed changes and a plan fingerprint.
-- `commands apply (--global | --guild <id>) [--prune] [--expected-plan <fingerprint>]` prints the current plan and applies individual changes. Plan and apply require an explicit target.
-
-Plan/apply use `BotToken` from the normal configuration sources, including `ORABOT_BotToken`. The deployment CLI has no token argument. These modes use REST without starting the Gateway, polling workers or normal bot service graph.
-
-From the repository root, after the Release build above, PowerShell examples are:
+Normal bot startup loads interaction modules and never registers or deletes application commands. Registration is a separate, explicit operation using Discord.Net:
 
 ```powershell
-# Offline exports for each deployment scope.
-dotnet run --project src/Orabot.Hosts.ConsoleHost -c Release --no-build -- commands export --global
-$guildId = "123456789012345678" # Replace with the test server's ID.
-dotnet run --project src/Orabot.Hosts.ConsoleHost -c Release --no-build -- commands export --guild $guildId
+# Register in a test server first; replace the example ID.
+dotnet run --project src/Orabot.Hosts.ConsoleHost -c Release --no-build -- commands register --guild 123456789012345678
 
-# Read and review a server plan, then apply only that reviewed fingerprint.
-$plan = (dotnet run --project src/Orabot.Hosts.ConsoleHost -c Release --no-build -- commands plan --guild $guildId | Out-String) | ConvertFrom-Json
-$plan | ConvertTo-Json -Depth 30
-dotnet run --project src/Orabot.Hosts.ConsoleHost -c Release --no-build -- commands apply --guild $guildId --expected-plan $plan.fingerprint
-
-# Read a global deployment plan when ready to promote the schema.
-dotnet run --project src/Orabot.Hosts.ConsoleHost -c Release --no-build -- commands plan --global
+# Register globally when ready.
+dotnet run --project src/Orabot.Hosts.ConsoleHost -c Release --no-build -- commands register --global
 ```
 
-Guild deployment targets one server. Global definitions allow guild and bot-DM contexts with guild installation; user installation is not enabled. Guild endpoints omit global-only context/install fields. Test in a guild before promoting global definitions.
+Both commands use the normal configuration sources, including `DOTNET_ENVIRONMENT` and `ORABOT_BotToken`. There is no token argument. The registration process loads the modules and their documentation services without starting the Gateway or polling workers.
 
-Unchanged managed commands are left alone. Extra remote commands are preserved by default. **`--prune` permits deletion of every extra command in the selected scope**, including commands outside this local catalog; include it in both the reviewed plan and apply when deletions are intended.
+Registration calls `InteractionService.RegisterCommandsToGuildAsync` or `RegisterCommandsGloballyAsync` with `deleteMissing: false`. Discord.Net builds the command definitions and performs the update. Its registration API uses a bulk overwrite, retains extra remote commands by name, and writes even when definitions are unchanged. A remote command of a different type sharing a local command's name is not preserved by that SDK comparison. Use a dedicated test guild to verify the result before global registration.
 
-The optional `--expected-plan` rejects changes to the reviewed scope, definitions, prune mode or remote state. Apply also checks remote state again before writing. Writes are individual and non-atomic: cancellation or a failure can leave earlier changes applied, so generate and review a new plan before retrying. Discord.Net 3.20.2's global-delete path does not forward all request cancellation/retry options, so an in-flight delete may finish after cancellation.
+The SDK registration APIs do not accept cancellation tokens. Ctrl+C requests cancellation, but an in-flight registration is awaited before its REST client is disposed and may already have updated Discord.
 
-Explicit zero default-member permissions are rejected: Discord.Net 3.20.2's remote model conflates API `null` and `"0"`, preventing a reliable comparison for that case.
+Global modules allow guild and bot-DM contexts with guild installation; user installation is not enabled. Offline export, deployment plans, fingerprints and pruning are no longer custom bot responsibilities.
 
 ## Subsequent modernization
 
