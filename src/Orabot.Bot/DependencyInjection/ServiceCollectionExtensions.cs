@@ -157,7 +157,7 @@ namespace Orabot.Bot.DependencyInjection
 		public static IServiceCollection AddLongRunningServices(this IServiceCollection serviceCollection)
 		{
 			return serviceCollection
-				.AddHostedService(provider => provider.GetRequiredService<DocsCachingService>())
+				.AddHostedService<DocsCachingService>()
 				.AddHostedService<ResourceCenterMapWatcherService>();
 		}
 

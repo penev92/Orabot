@@ -24,15 +24,6 @@ namespace Orabot.Bot.Features.Documentation
 		private readonly TimeSpan _scanInterval;
 		private readonly DocumentationCatalog _catalog;
 
-		/// <summary>Returns the catalog generation retained for compatibility with existing readers.</summary>
-		public DocumentationSnapshot Snapshot => _catalog.Snapshot;
-
-		public ParsedDocs ReleaseDocs => Snapshot.ReleaseDocs;
-
-		public ParsedDocs PlaytestDocs => Snapshot.PlaytestDocs;
-
-		public ParsedDocs DevelopmentDocs => Snapshot.DevelopmentDocs;
-
 		/// <summary>Receives the shared catalog, replaceable index client and hosted-service dependencies.</summary>
 		public DocsCachingService(
 			DocumentationCatalog catalog,

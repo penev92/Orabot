@@ -18,8 +18,9 @@ namespace Orabot.Tests.Workers
 		[Fact]
 		public void Cache_is_safe_to_read_before_first_refresh()
 		{
-			using var worker = CreateWorker(new FakeDocsApi(), new WorkerTestClock());
-			foreach (var docs in new[] { worker.ReleaseDocs, worker.PlaytestDocs, worker.DevelopmentDocs })
+			var catalog = new DocumentationCatalog();
+			using var worker = CreateWorker(new FakeDocsApi(), new WorkerTestClock(), catalog: catalog);
+			foreach (var docs in new[] { catalog.Snapshot.ReleaseDocs, catalog.Snapshot.PlaytestDocs, catalog.Snapshot.DevelopmentDocs })
 			{
 				Assert.Empty(docs.Traits);
 				Assert.Empty(docs.Weapons);
@@ -32,19 +33,20 @@ namespace Orabot.Tests.Workers
 		public async Task Refresh_publishes_all_versions_as_one_complete_snapshot()
 		{
 			var clock = new WorkerTestClock();
-			using var worker = CreateWorker(new FakeDocsApi(), clock);
-			var original = worker.Snapshot;
+			var catalog = new DocumentationCatalog();
+			using var worker = CreateWorker(new FakeDocsApi(), clock, catalog: catalog);
+			var original = catalog.Snapshot;
 			var refresh = Task.Run(() => worker.RefreshAsync(CancellationToken.None));
 
 			Assert.Equal(TimeSpan.FromSeconds(2), await clock.WaitForDelayAsync());
-			Assert.Same(original, worker.Snapshot);
+			Assert.Same(original, catalog.Snapshot);
 			clock.Advance(TimeSpan.FromSeconds(2));
 			Assert.Equal(TimeSpan.FromSeconds(2), await clock.WaitForDelayAsync());
-			Assert.Same(original, worker.Snapshot);
+			Assert.Same(original, catalog.Snapshot);
 			clock.Advance(TimeSpan.FromSeconds(2));
 			await refresh.WaitAsync(TimeSpan.FromSeconds(10));
 
-			var complete = worker.Snapshot;
+			var complete = catalog.Snapshot;
 			Assert.NotSame(original, complete);
 			Assert.Contains("release-1", complete.ReleaseDocs.Traits.Keys);
 			Assert.Contains("playtest-1", complete.PlaytestDocs.Traits.Keys);
@@ -56,9 +58,10 @@ namespace Orabot.Tests.Workers
 		{
 			var api = new FakeDocsApi();
 			var clock = new WorkerTestClock();
-			using var worker = CreateWorker(api, clock);
+			var catalog = new DocumentationCatalog();
+			using var worker = CreateWorker(api, clock, catalog: catalog);
 			await RefreshSuccessfullyAsync(worker, clock);
-			var previous = worker.Snapshot;
+			var previous = catalog.Snapshot;
 			api.Generation = 2;
 			api.FailingVersion = "playtest";
 
@@ -66,10 +69,10 @@ namespace Orabot.Tests.Workers
 			await clock.AdvanceNextDelayAsync(TimeSpan.FromSeconds(2));
 			await Assert.ThrowsAsync<HttpRequestException>(() => refresh.WaitAsync(TimeSpan.FromSeconds(10)));
 
-			Assert.Same(previous, worker.Snapshot);
-			Assert.Contains("release-1", worker.ReleaseDocs.Traits.Keys);
-			Assert.Contains("playtest-1", worker.PlaytestDocs.Traits.Keys);
-			Assert.Contains("bleed-1", worker.DevelopmentDocs.Traits.Keys);
+			Assert.Same(previous, catalog.Snapshot);
+			Assert.Contains("release-1", catalog.Snapshot.ReleaseDocs.Traits.Keys);
+			Assert.Contains("playtest-1", catalog.Snapshot.PlaytestDocs.Traits.Keys);
+			Assert.Contains("bleed-1", catalog.Snapshot.DevelopmentDocs.Traits.Keys);
 		}
 
 		[Fact]
@@ -77,9 +80,10 @@ namespace Orabot.Tests.Workers
 		{
 			var api = new FakeDocsApi();
 			var clock = new WorkerTestClock();
-			using var worker = CreateWorker(api, clock);
+			var catalog = new DocumentationCatalog();
+			using var worker = CreateWorker(api, clock, catalog: catalog);
 			await RefreshSuccessfullyAsync(worker, clock);
-			var previous = worker.Snapshot;
+			var previous = catalog.Snapshot;
 			api.Generation = 2;
 			using var cancellation = new CancellationTokenSource();
 
@@ -87,7 +91,7 @@ namespace Orabot.Tests.Workers
 			Assert.Equal(TimeSpan.FromSeconds(2), await clock.WaitForDelayAsync());
 			cancellation.Cancel();
 			await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh.WaitAsync(TimeSpan.FromSeconds(10)));
-			Assert.Same(previous, worker.Snapshot);
+			Assert.Same(previous, catalog.Snapshot);
 		}
 
 		[Fact]
@@ -180,8 +184,8 @@ namespace Orabot.Tests.Workers
 		}
 
 		private static DocsCachingService CreateWorker(FakeDocsApi api, WorkerTestClock clock,
-			WorkerFailureState? failures = null, ILogger<DocsCachingService>? logger = null) =>
-			new DocsCachingService(new DocumentationCatalog(), api, Options.Create(new DocumentationCacheOptions { ScanInterval = 300000 }),
+			WorkerFailureState? failures = null, ILogger<DocsCachingService>? logger = null, DocumentationCatalog? catalog = null) =>
+			new DocsCachingService(catalog ?? new DocumentationCatalog(), api, Options.Create(new DocumentationCacheOptions { ScanInterval = 300000 }),
 				logger ?? NullLogger<DocsCachingService>.Instance, clock, failures ?? new WorkerFailureState());
 
 		private static async Task RefreshSuccessfullyAsync(DocsCachingService worker, WorkerTestClock clock)

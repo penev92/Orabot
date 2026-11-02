@@ -12,10 +12,10 @@ using System.Threading;
 
 namespace Orabot.Bot.Features.Documentation
 {
-	/// <summary>Owns the documentation feature's configuration, clients, catalog, rendering and refresh worker.</summary>
+	/// <summary>Registers documentation configuration, clients, catalog and rendering.</summary>
 	public static class DocumentationFeatureRegistration
 	{
-		/// <summary>Registers the shared catalog and refresh-worker singleton; the host owns hosted-service ordering.</summary>
+		/// <summary>Adds documentation services; the host registers the refresh worker in its chosen lifecycle order.</summary>
 		public static IServiceCollection AddDocumentationFeature(this IServiceCollection services, IConfiguration configuration)
 		{
 			services.AddSingleton<IValidateOptions<DocumentationLinksOptions>, DocumentationLinksOptionsValidator>();
@@ -41,7 +41,6 @@ namespace Orabot.Bot.Features.Documentation
 				client.BaseAddress = new Uri("https://docs.openra.net/en/");
 				client.Timeout = TimeSpan.FromSeconds(30);
 			}).ConfigurePrimaryHttpMessageHandler(CreateHandler).SetHandlerLifetime(Timeout.InfiniteTimeSpan);
-			services.AddSingleton<DocsCachingService>();
 			return services;
 		}
 

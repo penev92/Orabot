@@ -120,7 +120,7 @@ public sealed class HostConfigurationTests
 	}
 
 	[Fact]
-	public void Hosting_and_readers_share_one_documentation_worker()
+	public void Host_registers_one_documentation_worker_in_shutdown_order()
 	{
 		var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
 		builder.Configuration.AddInMemoryCollection(ValidValues());
@@ -131,7 +131,7 @@ public sealed class HostConfigurationTests
 		var hosted = services.GetServices<IHostedService>().ToArray();
 		Assert.Equal(4, hosted.Length);
 		Assert.IsType<global::Orabot.Bot.Discord.Bot>(hosted[0]);
-		Assert.Same(services.GetRequiredService<DocsCachingService>(), hosted[2]);
+		Assert.Same(Assert.Single(hosted.OfType<DocsCachingService>()), hosted[2]);
 		Assert.IsType<ResourceCenterMapWatcherService>(hosted[3]);
 	}
 
