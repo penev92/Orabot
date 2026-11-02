@@ -14,7 +14,6 @@ namespace Orabot.Bot.Discord.Interactions
 		private readonly Channel<Func<CancellationToken, Task>> _work;
 		private readonly int _workerCount;
 		private readonly ILogger<InteractionWorkQueue> _logger;
-		private int _accepting = 1;
 
 		public InteractionWorkQueue(ILogger<InteractionWorkQueue> logger, WorkerFailureState failureState,
 			int capacity = 64, int workerCount = 4) : base(logger, failureState)
@@ -33,7 +32,7 @@ namespace Orabot.Bot.Discord.Interactions
 		public bool TryEnqueue(Func<CancellationToken, Task> work)
 		{
 			ArgumentNullException.ThrowIfNull(work);
-			return Volatile.Read(ref _accepting) == 1 && _work.Writer.TryWrite(work);
+			return _work.Writer.TryWrite(work);
 		}
 
 		protected override Task ExecuteSupervisedAsync(CancellationToken stoppingToken) =>
@@ -59,14 +58,12 @@ namespace Orabot.Bot.Discord.Interactions
 
 		public override Task StopAsync(CancellationToken cancellationToken)
 		{
-			Interlocked.Exchange(ref _accepting, 0);
 			_work.Writer.TryComplete();
 			return base.StopAsync(cancellationToken);
 		}
 
 		public override void Dispose()
 		{
-			Interlocked.Exchange(ref _accepting, 0);
 			_work.Writer.TryComplete();
 			base.Dispose();
 		}
