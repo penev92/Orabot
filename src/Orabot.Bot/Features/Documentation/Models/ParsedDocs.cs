@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 
 namespace Orabot.Bot.Features.Documentation.Models
 {
+	/// <summary>Holds the four searchable families for one documentation version, including a safe empty state.</summary>
 	public class ParsedDocs
 	{
 		private static readonly IReadOnlyDictionary<string, DocsEntry> EmptyEntries =

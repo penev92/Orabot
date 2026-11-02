@@ -8,6 +8,6 @@ namespace Orabot.Bot.Infrastructure.BackgroundWork
 
 		public bool HasFailed => Volatile.Read(ref _hasFailed) != 0;
 
-		internal void MarkFailed() => Interlocked.Exchange(ref _hasFailed, 1);
+		internal void MarkFailed() => Volatile.Write(ref _hasFailed, 1);
 	}
 }

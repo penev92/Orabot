@@ -15,31 +15,25 @@ using System.Threading.Tasks;
 
 namespace Orabot.Bot.Features.Documentation
 {
-	public sealed record DocumentationSnapshot(ParsedDocs ReleaseDocs, ParsedDocs PlaytestDocs, ParsedDocs DevelopmentDocs);
-
+	/// <summary>Refreshes the shared documentation catalog without exposing partially downloaded generations.</summary>
 	public class DocsCachingService : SupervisedBackgroundService
 	{
 		private readonly IDocsApi _docsApi;
 		private readonly TimeProvider _timeProvider;
 		private readonly ILogger<DocsCachingService> _logger;
 		private readonly TimeSpan _scanInterval;
-		private DocumentationSnapshot _snapshot = new DocumentationSnapshot(ParsedDocs.Empty, ParsedDocs.Empty, ParsedDocs.Empty);
+		private readonly DocumentationCatalog _catalog;
 
-		public DocumentationSnapshot Snapshot => Volatile.Read(ref _snapshot);
-
-		public ParsedDocs ReleaseDocs => Snapshot.ReleaseDocs;
-
-		public ParsedDocs PlaytestDocs => Snapshot.PlaytestDocs;
-
-		public ParsedDocs DevelopmentDocs => Snapshot.DevelopmentDocs;
-
+		/// <summary>Receives the shared catalog, replaceable index client and hosted-service dependencies.</summary>
 		public DocsCachingService(
+			DocumentationCatalog catalog,
 			IDocsApi docsApi,
 			IOptions<DocumentationCacheOptions> options,
 			ILogger<DocsCachingService> logger,
 			TimeProvider timeProvider,
 			WorkerFailureState failureState) : base(logger, failureState)
 		{
+			_catalog = catalog;
 			_docsApi = docsApi;
 			_timeProvider = timeProvider;
 			_logger = logger;
@@ -74,7 +68,7 @@ namespace Orabot.Bot.Features.Documentation
 			await Task.Delay(TimeSpan.FromSeconds(2), _timeProvider, cancellationToken);
 			var development = await ParseSearchIndex("bleed", cancellationToken);
 			cancellationToken.ThrowIfCancellationRequested();
-			Volatile.Write(ref _snapshot, new DocumentationSnapshot(release, playtest, development));
+			_catalog.Publish(new DocumentationSnapshot(release, playtest, development));
 		}
 
 		private async Task<ParsedDocs> ParseSearchIndex(string version, CancellationToken cancellationToken)
@@ -92,6 +86,7 @@ namespace Orabot.Bot.Features.Documentation
 			};
 		}
 
+		/// <summary>Filters and de-duplicates one family while rejecting malformed search-index entries.</summary>
 		public static IReadOnlyDictionary<string, DocsEntry> PrepareEntries(DocsEntry[] docs, string prefix)
 		{
 			if (docs.Any(entry => entry == null || entry.Location == null || entry.Title == null))

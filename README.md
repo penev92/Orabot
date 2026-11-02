@@ -24,7 +24,7 @@ src/
     Infrastructure/         Configuration validation, worker supervision and serialization
     DependencyInjection/    Bot service registration
 tests/
-  Orabot.Tests/             Offline configuration, lifecycle and worker tests
+  Orabot.Tests/             Offline configuration, lifecycle, interaction and deployment tests
 ```
 
 Feature-specific handlers, models and rendering live together. Shared Discord dispatch contracts are in the bot project; the former `Orabot.Core.Abstractions` project has been absorbed into it.
@@ -51,7 +51,7 @@ dotnet test Orabot.slnx --configuration Release --no-build --no-restore
 
 Package references and versions are declared in the project files. NuGet auditing includes transitive dependencies.
 
-Tests use synthetic configuration, fake APIs, fake time and an offline connection seam. They do not log into Discord or read the operator's User Secrets store.
+Tests use synthetic configuration, fake APIs and fake time. SDK metadata, interaction execution and deployment behavior are exercised against offline fixtures. Tests do not log into Discord or read the operator's User Secrets store.
 
 Build output for the executable is under `src/Orabot.Hosts.ConsoleHost/bin/Release/net10.0/`. The folder publish profile also targets .NET 10.
 
@@ -71,6 +71,8 @@ Use double underscores for nested environment-variable keys, for example `ORABOT
 
 The host validates configuration before constructing the Discord service graph. Errors identify invalid keys without printing their values. Existing role settings, documentation/icon URLs and storage paths retain their configuration names. Empty role allowlists and reaction message ID `0` remain valid.
 
+Documentation owns typed validation for the existing `Traits`, `Weapons`, `Lua` and `SpriteSequences` sections. Each keeps `ReleasePageUrl`, `PlaytestPageUrl` and `DevelopmentPageUrl`; the shared documentation icon remains `OpenRaFaviconUrl`. HTTP/HTTPS URLs are required and embedded credentials are rejected. These settings have left the temporary legacy validation bridge.
+
 Connection and polling options include:
 
 | Key | Meaning |
@@ -86,11 +88,11 @@ Log/replay storage settings retain their existing path semantics. Use absolute p
 
 ## Console lifetime and background work
 
-The Generic Host owns the Discord connection and both polling workers. Use **Ctrl+C** for graceful shutdown. Standard input no longer controls the process lifetime.
+The Generic Host owns the Discord connection, interaction work queue and both polling workers. Use **Ctrl+C** for graceful shutdown. Standard input no longer controls the process lifetime.
 
 Repeated gateway readiness events update connectivity state and never start another worker. Map polling waits for Discord readiness; documentation refresh can warm its cache independently. A complete documentation generation is published atomically, and failed refreshes retain the last good generation.
 
-Polling requests and delays observe cancellation. The host stops workers before closing the Discord connection. It requests cooperative shutdown with a 30-second budget; Discord.Net's stop/logout operations have no cancellation parameter and are awaited. Live transport teardown still needs test-guild verification.
+Polling requests and delays observe cancellation. The host stops polling workers and the interaction queue before closing the Discord connection. The host's default cooperative shutdown budget is 30 seconds; Discord.Net's stop/logout operations have no cancellation parameter and are awaited. Live transport teardown still needs test-guild verification.
 
 Recoverable upstream failures are logged and retried on the configured interval. Unexpected worker failure stops the host and produces a nonzero process exit. SDK and worker diagnostics record safe metadata rather than raw transport payloads or message content.
 
@@ -98,12 +100,40 @@ Map startup still establishes its initial cursor without announcing the existing
 
 The socket client subscribes explicitly to guild/message/reaction events and Message Content. Enable the required Message Content intent for the application: passive issue/map recognition and attachment processing still depend on it.
 
+## Slash commands and documentation
+
+The ten existing slash commands are now attributed Discord.Net `InteractionService` modules: `supportdir`, `academy`, `book`, `sdk`, `utility`, `orabot`, `lua`, `traits`, `weapons` and `sprite-sequences`. Documentation keeps optional `name` autocomplete and optional `version` choices `release`, `playtest` and `development`, defaulting to `release`.
+
+Ordinary slash commands receive one **public deferred response**, then edit that response when execution completes. A bounded queue has four execution workers and room for 64 pending commands; a full queue returns a busy response. SDK execution uses synchronous run mode within those workers so the command task and its dependency scope remain owned and awaited.
+
+Autocomplete responds directly from the in-memory documentation catalog and performs no HTTP requests. Cold caches return empty suggestions; results are limited to 25 choices with bounded labels and values. Each autocomplete callback owns one response bounded by the acknowledgment deadline, and an uncertain transport failure never triggers a second attempt. Submitted options are validated again by the server.
+
+Named documentation lookups use a ten-second request/body deadline, a four-MiB decoded HTML budget and a per-document nesting limit. An unknown heading retains the family-page fallback. HTTP lookup, catalog refresh and embed rendering have separate responsibilities; rendering performs no network access. Upstream failures complete the deferred command with a clear error.
+
+## Registering application commands
+
+Normal bot startup loads interaction modules and never registers or deletes application commands. Registration is a separate, explicit operation using Discord.Net:
+
+```powershell
+# Register in a test server first; replace the example ID.
+dotnet run --project src/Orabot.Hosts.ConsoleHost -c Release --no-build -- commands register --guild 123456789012345678
+
+# Register globally when ready.
+dotnet run --project src/Orabot.Hosts.ConsoleHost -c Release --no-build -- commands register --global
+```
+
+Both commands use the normal configuration sources, including `DOTNET_ENVIRONMENT` and `ORABOT_BotToken`. There is no token argument. The registration process loads the modules and their documentation services without starting the Gateway or polling workers.
+
+Registration calls `InteractionService.RegisterCommandsToGuildAsync` or `RegisterCommandsGloballyAsync` with `deleteMissing: false`. Discord.Net builds the command definitions and performs the update. Its registration API uses a bulk overwrite, retains extra remote commands by name, and writes even when definitions are unchanged. A remote command of a different type sharing a local command's name is not preserved by that SDK comparison. Use a dedicated test guild to verify the result before global registration.
+
+The SDK registration APIs do not accept cancellation tokens. Ctrl+C requests cancellation, but an in-flight registration is awaited before its REST client is disposed and may already have updated Discord.
+
+Global modules allow guild and bot-DM contexts with guild installation; user installation is not enabled. Offline export, deployment plans, fingerprints and pruning are no longer custom bot responsibilities.
+
 ## Subsequent modernization
 
-Prefix commands and custom slash/autocomplete dispatch remain in place. Slash-command publication is still disabled during normal startup. Existing discarded event-handler tasks, quote async operations and attachment processing are subsequent interaction/feature work.
-
-The next stage introduces `InteractionService`, documentation command modules and explicit command publication. Remaining prefix commands then migrate to slash commands, followed by the operational finish and test-guild rollout verification.
+Stage 4 migrates the remaining prefix commands (`help`, `hi`, `say`, `quote` and `role`) and completes ownership/bounds for remaining message, quote and attachment work. Legacy `WebClient` and `Uri.EscapeUriString` warnings remain in that code. Stage 5 covers the operational finish and live test-guild rollout verification.
 
 ### Temporary configuration bridge
 
-`LegacyFeatureOptions` and its validator pre-validate settings that older feature constructors still read through `IConfiguration`. As each feature adopts its own typed options, move its validation and test cases into that feature and remove its entries from this bridge. Remove the bridge and its test class after the final legacy consumer is migrated. The explicit validation before hosted-service construction can then be reviewed for removal; ordinary startup validation remains.
+`LegacyFeatureOptions` and its validator now cover only remaining legacy GitHub-icon, role and log/replay-storage settings read through `IConfiguration`. Documentation owns its typed options and validation. As each remaining feature migrates, move its validation and test cases into that feature and remove its entries from the bridge. Remove the bridge and its tests after its final consumer is migrated; ordinary startup validation remains.
