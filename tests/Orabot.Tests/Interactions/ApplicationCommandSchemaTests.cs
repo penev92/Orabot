@@ -19,7 +19,11 @@ public sealed class ApplicationCommandSchemaTests
 	{
 		using var client = new DiscordSocketClient();
 		using var lifetime = new OfflineHostApplicationLifetime();
-		var configuration = new ConfigurationBuilder().AddInMemoryCollection(DocumentationOptionsTests.ValidSettings()).Build();
+		var settings = DocumentationOptionsTests.ValidSettings();
+		settings["FreelyAssignedRoles"] = "";
+		settings["FreelyAssignedRolesByEmote"] = "";
+		settings["RoleAssignmentMessageId"] = "0";
+		var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
 		using var services = new ServiceCollection().AddLogging().AddSingleton<IHostApplicationLifetime>(lifetime)
 			.AddSingleton(TimeProvider.System).AddCommandFeatures(configuration)
 			.AddInteractionFramework(client.Rest).BuildServiceProvider();
@@ -27,7 +31,8 @@ public sealed class ApplicationCommandSchemaTests
 		await framework.AddModulesAsync(typeof(OpenRaInformationModule).Assembly, services);
 		var commands = framework.SlashCommands.ToDictionary(command => command.Name);
 
-		Assert.Equal(13, commands.Count);
+		Assert.Equal(14, commands.Count);
+		Assert.Contains("role", commands.Keys);
 		Assert.Contains("help", commands.Keys);
 		Assert.Contains("hi", commands.Keys);
 		Assert.Contains("say", commands.Keys);

@@ -1,96 +1,91 @@
-﻿using System.Collections.Generic;
+using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Orabot.Bot.Discord.BackgroundWork;
 using Orabot.Bot.Discord.Messages;
 
 namespace Orabot.Bot.Features.Roles
 {
-
-	internal class RoleAssignmentReactionEventHandler : IReactionEventHandler
+	/// <summary>Admits only configured reaction-role events and performs owned, cancellable work off the Gateway.</summary>
+	internal sealed class RoleAssignmentReactionEventHandler : IReactionEventHandler
 	{
-		private readonly ulong _roleAssignmentMessageId;
-		private readonly IReadOnlyDictionary<string, string> _freelyAssignedRoles;
+		private readonly DiscordSocketClient _client;
+		private readonly RoleAssignmentService _roles;
+		private readonly BotWorkQueue _queue;
+		private readonly IHostApplicationLifetime _lifetime;
+		private readonly ILogger<RoleAssignmentReactionEventHandler> _logger;
+		private readonly object _reactionOrder = new();
+		private Task _lastReaction = Task.CompletedTask;
 
-		public RoleAssignmentReactionEventHandler(IConfiguration configuration)
+		public RoleAssignmentReactionEventHandler(DiscordSocketClient client, RoleAssignmentService roles, BotWorkQueue queue,
+			IHostApplicationLifetime lifetime, ILogger<RoleAssignmentReactionEventHandler> logger)
 		{
-			_roleAssignmentMessageId = ulong.Parse(configuration["RoleAssignmentMessageId"]);
-			_freelyAssignedRoles = configuration["FreelyAssignedRolesByEmote"]
-				.Split(';')
-				.Select(x => x.Trim())
-				.Where(x => !string.IsNullOrWhiteSpace(x))
-				.Select(x => x.Split(':'))
-				.ToDictionary(x => x[0], y => y[1]);
+			_client = client; _roles = roles; _queue = queue; _lifetime = lifetime; _logger = logger;
 		}
 
-		public async Task HandleReactionAddedAsync(Cacheable<IUserMessage, ulong> messageGetter, Cacheable<IMessageChannel, ulong> channelGetter, SocketReaction reaction)
+		public Task HandleReactionAddedAsync(Cacheable<IUserMessage, ulong> message, Cacheable<IMessageChannel, ulong> channel, SocketReaction reaction) =>
+			HandleAsync(message.Id, channel, reaction, true);
+
+		public Task HandleReactionRemovedAsync(Cacheable<IUserMessage, ulong> message, Cacheable<IMessageChannel, ulong> channel, SocketReaction reaction) =>
+			HandleAsync(message.Id, channel, reaction, false);
+
+		private Task HandleAsync(ulong messageId, Cacheable<IMessageChannel, ulong> channel, SocketReaction reaction, bool add)
 		{
-			var message = await messageGetter.GetOrDownloadAsync();
-			var channel = await channelGetter.GetOrDownloadAsync();
-			if (!CanHandle(channel, message, reaction, out var guildUser, out var targetRole))
-			{
-				return;
-			}
-			
-			if (guildUser.Roles.All(x => x.Name != targetRole.Name))
-			{
-				await guildUser.AddRoleAsync(targetRole, new RequestOptions { AuditLogReason = "User asked for role." });
-			}
+			TryQueue(messageId, reaction.UserId, reaction.Emote.Name,
+				reaction.User.IsSpecified ? reaction.User.Value as IGuildUser : null,
+				async token => channel.HasValue ? channel.Value
+					: await _client.GetChannelAsync(channel.Id, new RequestOptions { CancelToken = token }) as IMessageChannel, add);
+			return Task.CompletedTask;
 		}
 
-		public async Task HandleReactionRemovedAsync(Cacheable<IUserMessage, ulong> messageGetter, Cacheable<IMessageChannel, ulong> channelGetter, SocketReaction reaction)
+		internal bool TryQueue(ulong messageId, ulong userId, string emoteName, IGuildUser cachedMember,
+			Func<CancellationToken, Task<IMessageChannel>> getChannel, bool add)
 		{
-			var message = await messageGetter.GetOrDownloadAsync();
-			var channel = await channelGetter.GetOrDownloadAsync();
-			if (!CanHandle(channel, message, reaction, out var guildUser, out var targetRole))
+			if (_lifetime.ApplicationStopping.IsCancellationRequested || _roles.AssignmentMessageId == 0
+				|| messageId != _roles.AssignmentMessageId || !_roles.TryGetReactionRole(emoteName, out var roleName)
+				|| cachedMember?.IsBot == true) return false;
+			bool accepted;
+			lock (_reactionOrder)
 			{
-				return;
+				var previous = _lastReaction;
+				var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+				accepted = _queue.TryEnqueue(async queueToken =>
+				{
+					using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(queueToken, _lifetime.ApplicationStopping);
+					cancellation.CancelAfter(TimeSpan.FromSeconds(10));
+					var token = cancellation.Token;
+					try
+					{
+						// Preserve Gateway admission order even when the shared queue has several
+						// consumers and an earlier event needs an uncached member/channel fetch.
+						await previous.WaitAsync(token);
+						token.ThrowIfCancellationRequested();
+						var channel = await getChannel(token);
+						if (channel is not IGuildChannel guildChannel) return;
+						var guild = guildChannel.Guild;
+						var role = guild.Roles.FirstOrDefault(x => string.Equals(x.Name, roleName, StringComparison.Ordinal));
+						if (role == null) return;
+						var member = cachedMember?.GuildId == guild.Id && cachedMember.Id == userId ? cachedMember
+							: await guild.GetUserAsync(userId, CacheMode.AllowDownload, new RequestOptions { CancelToken = token });
+						if (member?.Id != userId) return;
+						await _roles.SetAsync(guild, member, role, add, token);
+					}
+					catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+					catch (Exception exception)
+					{
+						_logger.LogWarning("Reaction role work failed ({ExceptionType}).", exception.GetType().FullName);
+					}
+					finally { completed.TrySetResult(); }
+				});
+				if (accepted) _lastReaction = completed.Task;
 			}
-
-			if (guildUser.Roles.Any(x => x.Name == targetRole.Name))
-			{
-				await guildUser.RemoveRoleAsync(targetRole, new RequestOptions { AuditLogReason = "User asked that role be removed." });
-			}
-		}
-
-		private bool CanHandle(IMessageChannel channel, IMessage message, SocketReaction reaction, out SocketGuildUser guildUser, out SocketRole targetRole)
-		{
-			guildUser = null;
-			targetRole = null;
-
-			var user = reaction.User.Value;
-			var guild = (channel as SocketGuildChannel)?.Guild;
-			if (guild == null || !reaction.User.IsSpecified || reaction.User.Value == null)
-			{
-				return false;
-			}
-
-			if (message.Id != _roleAssignmentMessageId)
-			{
-				return false;
-			}
-
-			if (!_freelyAssignedRoles.TryGetValue(reaction.Emote.Name, out var targetRoleName))
-			{
-				return false;
-			}
-
-			var requestedRole = guild.Roles.FirstOrDefault(x => x.Name == targetRoleName);
-			if (requestedRole == null)
-			{
-				return false;
-			}
-
-			if (!(user is SocketGuildUser socketGuildUser))
-			{
-				return false;
-			}
-
-			guildUser = socketGuildUser;
-			targetRole = requestedRole;
-			return true;
+			if (!accepted) _logger.LogWarning("Reaction role work was rejected because the bot work queue is full or closed.");
+			return accepted;
 		}
 	}
 }

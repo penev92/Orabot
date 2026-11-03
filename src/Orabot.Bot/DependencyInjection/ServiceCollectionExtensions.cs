@@ -59,7 +59,6 @@ namespace Orabot.Bot.DependencyInjection
 				.AddDefaultEventHandlerServices()
 				.AddDefaultCustomMessageHandlers()
 				.AddSingleton<ModuleBase<SocketCommandContext>, QuoteModule>()
-				.AddSingleton<ModuleBase<SocketCommandContext>, RoleManagementModule>()
 				.AddSingleton<QuotingService>()
 				.AddDefaultTransformers()
 				.AddSingleton<IRestClient>(_ =>
@@ -113,7 +112,9 @@ namespace Orabot.Bot.DependencyInjection
 		public static IServiceCollection AddCommandFeatures(this IServiceCollection services, IConfiguration configuration)
 		{
 			services.AddOptions<TrustedRoleOptions>().Bind(configuration);
-			return services.AddDocumentationFeature(configuration);
+			services.AddSingleton<IValidateOptions<RolesOptions>, RolesOptionsValidator>();
+			services.AddOptions<RolesOptions>().Bind(configuration).ValidateOnStart();
+			return services.AddSingleton<RoleAssignmentService>().AddDocumentationFeature(configuration);
 		}
 
 		public static IServiceCollection AddDefaultEventHandlerServices(this IServiceCollection serviceCollection)
