@@ -1,3 +1,6 @@
+using System.IO;
+using System.Net;
+using Orabot.Bot.Infrastructure.Attachments;
 using Orabot.Bot.Discord.BackgroundWork;
 using System;
 using System.Globalization;
@@ -62,6 +65,7 @@ namespace Orabot.Bot.DependencyInjection
 						configureSerialization: s => s.UseSystemTextJson(serializationOptions));
 				})
 				.AddCommandFeatures(configuration)
+				.AddAttachmentDownloads()
 				.AddResourceCenterIntegration()
 				.AddYamlDeserializer()
 				.AddSingleton(TimeProvider.System)
@@ -98,6 +102,10 @@ namespace Orabot.Bot.DependencyInjection
 				.ValidateOnStart();
 			services.AddSingleton<IValidateOptions<LegacyFeatureOptions>, LegacyFeatureOptionsValidator>();
 			services.AddOptions<LegacyFeatureOptions>().Bind(configuration).ValidateOnStart();
+			services.AddOptions<LogOptions>().Bind(configuration)
+				.Validate(options => IsStoragePath(options.LogStorageFolder), "LogStorageFolder").ValidateOnStart();
+			services.AddOptions<ReplayOptions>().Bind(configuration)
+				.Validate(options => IsStoragePath(options.ReplayStorageFolder), "ReplayStorageFolder").ValidateOnStart();
 			return services;
 		}
 
@@ -108,6 +116,24 @@ namespace Orabot.Bot.DependencyInjection
 			services.AddSingleton<IValidateOptions<RolesOptions>, RolesOptionsValidator>();
 			services.AddOptions<RolesOptions>().Bind(configuration).ValidateOnStart();
 			return services.AddSingleton<RoleAssignmentService>().AddSingleton<QuotingService>().AddDocumentationFeature(configuration);
+		}
+
+		static IServiceCollection AddAttachmentDownloads(this IServiceCollection services)
+		{
+			services.AddHttpClient(AttachmentDownloader.ClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
+				.ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+				{
+					AllowAutoRedirect = false, AutomaticDecompression = DecompressionMethods.None,
+					PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+				}).SetHandlerLifetime(Timeout.InfiniteTimeSpan);
+			return services.AddSingleton<AttachmentDownloader>();
+		}
+
+		static bool IsStoragePath(string value)
+		{
+			if (string.IsNullOrWhiteSpace(value) || value.IndexOfAny(Path.GetInvalidPathChars()) >= 0) return false;
+			try { _ = Path.GetFullPath(value); return true; }
+			catch (Exception exception) when (exception is ArgumentException or NotSupportedException or IOException) { return false; }
 		}
 
 		public static IServiceCollection AddDefaultEventHandlerServices(this IServiceCollection serviceCollection)
@@ -149,6 +175,7 @@ namespace Orabot.Bot.DependencyInjection
 			return serviceCollection.AddSingleton(deserializer =>
 				new DeserializerBuilder()
 					.IgnoreUnmatchedProperties()
+					.WithDuplicateKeyChecking()
 					.WithTypeConverter(new DateTimeConverter(DateTimeKind.Utc, CultureInfo.InvariantCulture, false, "yyyy-MM-dd HH-mm-ss"))
 					.Build()
 			);
