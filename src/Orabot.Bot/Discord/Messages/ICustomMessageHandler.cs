@@ -1,12 +1,13 @@
-﻿using Discord.WebSocket;
-using System.Threading.Tasks;
+using System.Threading;
+using Discord;
+﻿using System.Threading.Tasks;
 
 namespace Orabot.Bot.Discord.Messages
 {
 	public interface ICustomMessageHandler
 	{
-		bool CanHandle(SocketUserMessage message);
+		bool CanHandle(IUserMessage message);
 
-		Task InvokeAsync(SocketUserMessage message);
+		Task InvokeAsync(IUserMessage message, CancellationToken cancellationToken = default);
 	}
 }

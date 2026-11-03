@@ -1,6 +1,7 @@
+using System.Threading;
+using Discord;
 ﻿using System.Collections.Generic;
 using System.Threading.Tasks;
-using Discord.WebSocket;
 using Orabot.Bot.Discord.Messages;
 using Orabot.Bot.Features.Maps.Rendering;
 
@@ -20,7 +21,7 @@ namespace Orabot.Bot.Features.Maps.Messages
 			_toEmbedTransformer = toEmbedTransformer;
 		}
 
-		public override async Task InvokeAsync(SocketUserMessage message)
+		public override async Task InvokeAsync(IUserMessage message, CancellationToken cancellationToken = default)
 		{
 			foreach (var numberStr in GetMatchedNumbers(message.Content))
 			{

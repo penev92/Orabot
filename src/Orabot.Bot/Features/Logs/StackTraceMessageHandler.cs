@@ -1,6 +1,7 @@
+using System.Threading;
+using Discord;
 ﻿using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using Discord.WebSocket;
 using Orabot.Bot.Discord.Messages;
 
 namespace Orabot.Bot.Features.Logs
@@ -14,13 +15,13 @@ namespace Orabot.Bot.Features.Logs
 			_attachmentLogFileToMessageTransformer = attachmentLogFileToMessageTransformer;
 		}
 
-		public bool CanHandle(SocketUserMessage message)
+		public bool CanHandle(IUserMessage message)
 		{
 			return Regex.IsMatch(message.Content, "Exception of type `[a-zA-Z.]*`: ", RegexOptions.Compiled)
 				|| Regex.IsMatch(message.Content, "Exception of type [a-zA-Z.]*: ", RegexOptions.Compiled);
 		}
 
-		public async Task InvokeAsync(SocketUserMessage message)
+		public async Task InvokeAsync(IUserMessage message, CancellationToken cancellationToken = default)
 		{
 			if (_attachmentLogFileToMessageTransformer.TryCreateExceptionExplanationMessage(message.Content, out var explanationMessage))
 				await message.Channel.SendMessageAsync(explanationMessage);

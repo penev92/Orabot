@@ -1,6 +1,7 @@
+using System.Threading;
+using Discord;
 ﻿using System.Linq;
 using System.Threading.Tasks;
-using Discord.WebSocket;
 using Orabot.Bot.Discord.Messages;
 
 namespace Orabot.Bot.Features.Logs
@@ -16,7 +17,7 @@ namespace Orabot.Bot.Features.Logs
 			_attachmentLogFileToMessageTransformer = attachmentLogFileToMessageTransformer;
 		}
 
-		public override async Task InvokeAsync(SocketUserMessage message)
+		public override async Task InvokeAsync(IUserMessage message, CancellationToken cancellationToken = default)
 		{
 			var attachment = message.Attachments.First(x => x.Filename.EndsWith(FileExtension));
 			var rawMessage = _attachmentLogFileToMessageTransformer.CreateRawMessage(attachment, out var fullText);

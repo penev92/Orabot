@@ -1,8 +1,9 @@
+using System.Threading;
+using Discord;
 ﻿using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using Discord.WebSocket;
 
 namespace Orabot.Bot.Discord.Messages
 {
@@ -25,7 +26,7 @@ namespace Orabot.Bot.Discord.Messages
 			_regexMatchPatterns = RegexMatchPatternKeywords.Select(x => RegexMatchPattern.Replace("{keyword}", x)).ToArray();
 		}
 
-		public bool CanHandle(SocketUserMessage message)
+		public bool CanHandle(IUserMessage message)
 		{
 			var canHandle = false;
 			var matches = _regexMatchPatterns.SelectMany(regexMatchPattern => Regex.Matches(message.Content, regexMatchPattern, _regexOptions));
@@ -42,7 +43,7 @@ namespace Orabot.Bot.Discord.Messages
 			return canHandle;
 		}
 
-		public abstract Task InvokeAsync(SocketUserMessage message);
+		public abstract Task InvokeAsync(IUserMessage message, CancellationToken cancellationToken = default);
 
 		protected IEnumerable<string> GetMatchedNumbers(string message)
 		{

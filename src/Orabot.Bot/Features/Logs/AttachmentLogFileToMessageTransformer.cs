@@ -15,7 +15,7 @@ namespace Orabot.Bot.Features.Logs
 			_logStorageFolder = configuration["LogStorageFolder"];
 		}
 
-		internal string CreateRawMessage(global::Discord.Attachment attachment, out string fullText)
+		internal string CreateRawMessage(global::Discord.IAttachment attachment, out string fullText)
 		{
 			var filePath = Path.Combine(_logStorageFolder, $"{Guid.NewGuid()}_{attachment.Filename}");
 

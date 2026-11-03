@@ -1,8 +1,8 @@
+using System.Threading;
 ﻿using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Discord;
-using Discord.WebSocket;
 using Microsoft.Extensions.Configuration;
 using Orabot.Bot.Discord.Messages;
 using Orabot.Bot.Features.GitHubReferences.Models;
@@ -39,7 +39,7 @@ namespace Orabot.Bot.Features.GitHubReferences.Messages
 			_issueIconBaseUrl = configuration["GitHubIconsBaseUrl"];
 		}
 
-		public override async Task InvokeAsync(SocketUserMessage message)
+		public override async Task InvokeAsync(IUserMessage message, CancellationToken cancellationToken = default)
 		{
 			foreach (var number in GetMatchedNumbers(message.Content))
 			{

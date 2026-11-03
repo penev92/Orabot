@@ -1,6 +1,7 @@
+using System.Threading;
+using Discord;
 ﻿using System.Linq;
 using System.Threading.Tasks;
-using Discord.WebSocket;
 using Orabot.Bot.Discord.Messages;
 
 namespace Orabot.Bot.Features.Replays
@@ -18,7 +19,7 @@ namespace Orabot.Bot.Features.Replays
 			_toEmbedTransformer = toEmbedTransformer;
 		}
 
-		public override async Task InvokeAsync(SocketUserMessage message)
+		public override async Task InvokeAsync(IUserMessage message, CancellationToken cancellationToken = default)
 		{
 			var attachment = message.Attachments.First(x => x.Filename.EndsWith(FileExtension));
 

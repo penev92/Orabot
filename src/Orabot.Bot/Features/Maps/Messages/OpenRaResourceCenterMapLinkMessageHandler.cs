@@ -1,5 +1,6 @@
-﻿using Discord.WebSocket;
-using Orabot.Bot.Features.Maps.Rendering;
+using System.Threading;
+using Discord;
+﻿using Orabot.Bot.Features.Maps.Rendering;
 using System.Threading.Tasks;
 
 namespace Orabot.Bot.Features.Maps.Messages
@@ -15,7 +16,7 @@ namespace Orabot.Bot.Features.Maps.Messages
 			_toEmbedTransformer = toEmbedTransformer;
 		}
 
-		public override async Task InvokeAsync(SocketUserMessage message)
+		public override async Task InvokeAsync(IUserMessage message, CancellationToken cancellationToken = default)
 		{
 			foreach (var matchedLink in GetMatchedLinks(message.Content))
 			{

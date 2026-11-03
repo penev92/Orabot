@@ -1,8 +1,9 @@
+using System.Threading;
+using Discord;
 ﻿using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using Discord.WebSocket;
 using Orabot.Bot.Discord.Messages;
 
 namespace Orabot.Bot.Features.Maps.Messages
@@ -20,12 +21,12 @@ namespace Orabot.Bot.Features.Maps.Messages
 			_regexOptions = RegexMatchCase ? RegexOptions.Compiled : RegexOptions.Compiled | RegexOptions.IgnoreCase;
 		}
 
-		public bool CanHandle(SocketUserMessage message)
+		public bool CanHandle(IUserMessage message)
 		{
 			return RegexMatchPatterns.Any(regexMatchPattern => Regex.IsMatch(message.Content, regexMatchPattern, _regexOptions));
 		}
 
-		public abstract Task InvokeAsync(SocketUserMessage message);
+		public abstract Task InvokeAsync(IUserMessage message, CancellationToken cancellationToken = default);
 
 		protected IEnumerable<string> GetMatchedLinks(string message)
 		{
