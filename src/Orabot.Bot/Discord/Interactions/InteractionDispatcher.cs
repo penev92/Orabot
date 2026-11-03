@@ -1,3 +1,4 @@
+using Orabot.Bot.Discord.BackgroundWork;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,13 +14,13 @@ namespace Orabot.Bot.Discord.Interactions
 	{
 		private readonly DiscordSocketClient _client;
 		private readonly InteractionService _interactions;
-		private readonly InteractionWorkQueue _queue;
+		private readonly BotWorkQueue _queue;
 		private readonly IServiceProvider _moduleServices;
 		private readonly TimeProvider _clock;
 		private readonly ILogger<InteractionDispatcher> _logger;
 
 		public InteractionDispatcher(DiscordSocketClient client, InteractionService interactions,
-			InteractionWorkQueue queue, IServiceProvider moduleServices,
+			BotWorkQueue queue, IServiceProvider moduleServices,
 			TimeProvider clock, ILogger<InteractionDispatcher> logger)
 		{
 			_client = client;

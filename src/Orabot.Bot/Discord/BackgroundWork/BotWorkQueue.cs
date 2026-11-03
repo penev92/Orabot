@@ -6,16 +6,16 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Orabot.Bot.Infrastructure.BackgroundWork;
 
-namespace Orabot.Bot.Discord.Interactions
+namespace Orabot.Bot.Discord.BackgroundWork
 {
-	/// <summary>Owns bounded interaction work so SDK execution and its dependency scope remain awaited.</summary>
-	internal sealed class InteractionWorkQueue : SupervisedBackgroundService
+	/// <summary>Owns bounded bot work so interactions, messages and reactions finish before shutdown.</summary>
+	internal sealed class BotWorkQueue : SupervisedBackgroundService
 	{
 		private readonly Channel<Func<CancellationToken, Task>> _work;
 		private readonly int _workerCount;
-		private readonly ILogger<InteractionWorkQueue> _logger;
+		private readonly ILogger<BotWorkQueue> _logger;
 
-		public InteractionWorkQueue(ILogger<InteractionWorkQueue> logger, WorkerFailureState failureState,
+		public BotWorkQueue(ILogger<BotWorkQueue> logger, WorkerFailureState failureState,
 			int capacity = 64, int workerCount = 4) : base(logger, failureState)
 		{
 			ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
@@ -51,7 +51,7 @@ namespace Orabot.Bot.Discord.Interactions
 				catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
 				catch (Exception exception)
 				{
-					_logger.LogWarning("Interaction work failed ({ExceptionType}).", exception.GetType().FullName);
+					_logger.LogWarning("Bot work failed ({ExceptionType}).", exception.GetType().FullName);
 				}
 			}
 		}

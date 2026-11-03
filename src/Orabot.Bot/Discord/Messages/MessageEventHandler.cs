@@ -1,39 +1,60 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
-using Microsoft.Extensions.DependencyInjection;
-using Orabot.Bot.Discord;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Orabot.Bot.Discord.BackgroundWork;
 
 namespace Orabot.Bot.Discord.Messages
 {
-	internal class MessageEventHandler : IMessageEventHandler
+	/// <summary>Admits passive message work to the shared queue and awaits each matching handler.</summary>
+	internal sealed class MessageEventHandler : IMessageEventHandler
 	{
-		private readonly IEnumerable<ICustomMessageHandler> _customMessageHandlers;
+		readonly IEnumerable<ICustomMessageHandler> handlers;
+		readonly BotWorkQueue queue;
+		readonly IHostApplicationLifetime lifetime;
+		readonly ILogger<MessageEventHandler> logger;
 
-		public MessageEventHandler(IServiceProvider serviceProvider)
+		public MessageEventHandler(IEnumerable<ICustomMessageHandler> handlers, BotWorkQueue queue,
+			IHostApplicationLifetime lifetime, ILogger<MessageEventHandler> logger)
 		{
-			_customMessageHandlers = serviceProvider.GetServices<ICustomMessageHandler>();
+			this.handlers = handlers;
+			this.queue = queue;
+			this.lifetime = lifetime;
+			this.logger = logger;
 		}
 
-		public async Task HandleMessageReceivedAsync(SocketMessage messageParam)
-		{
-			await Task.Yield();
-			
-			// Don't process the command if it was a System Message or the sender is a bot.
-			if (!(messageParam is SocketUserMessage message) || message.Source == MessageSource.Bot)
-			{
-				return;
-			}
+		public Task HandleMessageReceivedAsync(SocketMessage message) => message is IUserMessage userMessage ? HandleAsync(userMessage) : Task.CompletedTask;
 
-			Parallel.ForEach(_customMessageHandlers, customMessageHandler =>
+		internal Task HandleAsync(IUserMessage message)
+		{
+			if (message.Author.IsBot || message.Source != MessageSource.User || lifetime.ApplicationStopping.IsCancellationRequested)
+				return Task.CompletedTask;
+			if (!queue.TryEnqueue(token => ProcessAsync(message, token)))
+				logger.LogWarning("Message {MessageId} skipped because the bot work queue is full or stopping.", message.Id);
+			return Task.CompletedTask;
+		}
+
+		async Task ProcessAsync(IUserMessage message, CancellationToken stoppingToken)
+		{
+			using var budget = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, lifetime.ApplicationStopping);
+			budget.CancelAfter(TimeSpan.FromSeconds(30));
+			foreach (var handler in handlers)
 			{
-				if (customMessageHandler.CanHandle(message))
+				if (budget.IsCancellationRequested) break;
+				try
 				{
-					customMessageHandler.InvokeAsync(message);
+					if (handler.CanHandle(message)) await handler.InvokeAsync(message, budget.Token);
 				}
-			});
+				catch (OperationCanceledException) when (budget.IsCancellationRequested) { break; }
+				catch (Exception exception)
+				{
+					logger.LogWarning("Message {MessageId} handler {Handler} failed ({ExceptionType}).", message.Id, handler.GetType().Name, exception.GetType().FullName);
+				}
+			}
 		}
 	}
 }

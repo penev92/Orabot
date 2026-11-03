@@ -1,7 +1,4 @@
 using System;
-using System.Linq;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 
@@ -14,22 +11,6 @@ namespace Orabot.Hosts.ConsoleHost
 			AddSources(builder.Configuration, builder.Environment.ContentRootPath,
 				builder.Environment.EnvironmentName, args,
 				configuration => configuration.AddUserSecrets<Program>(optional: true, reloadOnChange: false));
-		}
-
-		internal static void Validate(IServiceProvider services)
-		{
-			// Host normally resolves hosted services before validating options. Validate first
-			// so legacy constructors cannot fail on invalid raw settings before key-only errors.
-			try
-			{
-				services.GetRequiredService<IStartupValidator>().Validate();
-			}
-			catch (AggregateException exception) when (exception.Flatten().InnerExceptions.All(error => error is OptionsValidationException))
-			{
-				var failures = exception.Flatten().InnerExceptions.Cast<OptionsValidationException>()
-					.SelectMany(error => error.Failures);
-				throw new OptionsValidationException(Options.DefaultName, typeof(OrabotConfiguration), failures);
-			}
 		}
 
 		// The provider callback keeps precedence testable without reading a real user's store.

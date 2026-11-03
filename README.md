@@ -31,11 +31,11 @@ Feature-specific handlers, models and rendering live together. Shared Discord di
 
 The current feature relationships are preserved:
 
-- General help uses the Quotes module name to group quote commands.
+- General help lists commands from Discord.Net's registered module metadata.
 - Replay rendering uses the Maps renderer to include map information.
 - Logs and Replays share the attachment-handler base in `Discord/Messages`.
 
-New feature code belongs with its owning slice. Shared infrastructure supports multiple features. Further separation of input handling, external I/O and rendering can happen within each feature's modernization.
+New feature code belongs with its owning slice. Shared infrastructure supports multiple features.
 
 ## Build and test
 
@@ -69,9 +69,9 @@ User Secrets remain available in every environment for compatibility with existi
 
 Use double underscores for nested environment-variable keys, for example `ORABOT_MapAnnouncer__ScanInterval`. `DOTNET_ENVIRONMENT` selects the host environment; its default is `Production`.
 
-The host validates configuration before constructing the Discord service graph. Errors identify invalid keys without printing their values. Existing role settings, documentation/icon URLs and storage paths retain their configuration names. Empty role allowlists and reaction message ID `0` remain valid.
+Feature-owned typed options use standard Host startup validation before hosted services start. Errors identify invalid keys without printing their values. All existing configuration keys and values are retained, including root role settings, documentation/icon URLs and storage paths. Empty role allowlists and reaction message ID `0` remain valid. The temporary `LegacyFeatureOptions` and early-validation bridge have been removed.
 
-Documentation owns typed validation for the existing `Traits`, `Weapons`, `Lua` and `SpriteSequences` sections. Each keeps `ReleasePageUrl`, `PlaytestPageUrl` and `DevelopmentPageUrl`; the shared documentation icon remains `OpenRaFaviconUrl`. HTTP/HTTPS URLs are required and embedded credentials are rejected. These settings have left the temporary legacy validation bridge.
+Documentation owns typed validation for the existing `Traits`, `Weapons`, `Lua` and `SpriteSequences` sections. Each keeps `ReleasePageUrl`, `PlaytestPageUrl` and `DevelopmentPageUrl`; the shared documentation icon remains `OpenRaFaviconUrl`. HTTP/HTTPS URLs are required and embedded credentials are rejected.
 
 Connection and polling options include:
 
@@ -84,15 +84,17 @@ Connection and polling options include:
 | `MapAnnouncer:ChannelName` | Required destination channel name |
 | `MapAnnouncer:ScanInterval` | Positive polling interval in milliseconds; defaults to 60000 |
 
-Log/replay storage settings retain their existing path semantics. Use absolute paths when launching from different working directories, and provision the storage folders before processing attachments. Validation checks syntax without creating directories.
+`LogStorageFolder` and `ReplayStorageFolder` retain their existing path semantics. Use absolute paths when launching from different working directories. Startup validation checks syntax without creating directories; attachment processing creates configured folders when needed.
 
 ## Console lifetime and background work
 
-The Generic Host owns the Discord connection, interaction work queue and both polling workers. Use **Ctrl+C** for graceful shutdown. Standard input no longer controls the process lifetime.
+The Generic Host owns the Discord connection, shared work queue and both polling workers. Use **Ctrl+C** for graceful shutdown. Standard input no longer controls the process lifetime.
+
+Interactions, passive messages and reaction roles share four execution workers and a queue of 64 pending jobs. A full queue returns a busy response to commands and skips new passive work. Passive message jobs have a 30-second budget; issue/map handlers deduplicate references and process at most three per handler. Reaction-role jobs have a ten-second budget and preserve admitted event order.
 
 Repeated gateway readiness events update connectivity state and never start another worker. Map polling waits for Discord readiness; documentation refresh can warm its cache independently. A complete documentation generation is published atomically, and failed refreshes retain the last good generation.
 
-Polling requests and delays observe cancellation. The host stops polling workers and the interaction queue before closing the Discord connection. The host's default cooperative shutdown budget is 30 seconds; Discord.Net's stop/logout operations have no cancellation parameter and are awaited. Live transport teardown still needs test-guild verification.
+Polling requests and delays observe cancellation. The host stops polling workers and the shared queue before closing the Discord connection. The host's default cooperative shutdown budget is 30 seconds; Discord.Net's stop/logout operations have no cancellation parameter and are awaited. Live transport teardown still needs test-guild verification.
 
 Recoverable upstream failures are logged and retried on the configured interval. Unexpected worker failure stops the host and produces a nonzero process exit. SDK and worker diagnostics record safe metadata rather than raw transport payloads or message content.
 
@@ -100,15 +102,37 @@ Map startup still establishes its initial cursor without announcing the existing
 
 The socket client subscribes explicitly to guild/message/reaction events and Message Content. Enable the required Message Content intent for the application: passive issue/map recognition and attachment processing still depend on it.
 
-## Slash commands and documentation
+## Commands
 
-The ten existing slash commands are now attributed Discord.Net `InteractionService` modules: `supportdir`, `academy`, `book`, `sdk`, `utility`, `orabot`, `lua`, `traits`, `weapons` and `sprite-sequences`. Documentation keeps optional `name` autocomplete and optional `version` choices `release`, `playtest` and `development`, defaulting to `release`.
+All former prefix commands have migrated to Discord.Net `InteractionService` modules. Messages beginning with `]` are no longer parsed as commands. The ten existing slash commands remain: `supportdir`, `academy`, `book`, `sdk`, `utility`, `orabot`, `lua`, `traits`, `weapons` and `sprite-sequences`.
 
-Ordinary slash commands receive one **public deferred response**, then edit that response when execution completes. A bounded queue has four execution workers and room for 64 pending commands; a full queue returns a busy response. SDK execution uses synchronous run mode within those workers so the command task and its dependency scope remain owned and awaited.
+| Command | Behavior |
+| --- | --- |
+| `/help` | Lists slash commands and message actions from SDK metadata |
+| `/hi` | Greets the caller |
+| `/say message` | Repeats text; requires a role named in `TrustedRoles` |
+| `/role [role]` | Uses Discord's native role picker to toggle an allowed role; omitting the option lists the self-assignment allowlist |
+| `/quote message message [end] [channel]` | Quotes a message or a same-author range; identifiers are strings accepting a snowflake, `channelId-messageId` pair or Discord message link |
+| `/quote custom text [author] [channel] [timestamp]` | Quotes custom text with optional author, source channel and free-form timestamp; requires `TrustedRoles` |
+| **Quote message** message action | Quotes the selected message from Discord's message context menu |
+
+Role and quote commands are guild-only. Source quotes stay within the current guild and require both the caller and bot to have **View Channel** and **Read Message History** in the source channel. Private threads are unsupported until membership can be verified. Bare message IDs try the current channel first, searching at most 50 accessible channels in total within ten seconds. Ranges examine the first message plus at most 25 following messages and include only the first author's messages through the requested endpoint, for a maximum of 26 messages.
+
+Commands receive one **public deferred response**, then edit that response when execution completes. SDK command execution and its dependency scope remain awaited within the shared queue. Commands, log replies and passive replies suppress mentions; replay replies may mention only the original poster.
+
+### Documentation lookups
+
+Documentation commands keep optional `name` autocomplete and optional `version` choices `release`, `playtest` and `development`, defaulting to `release`.
 
 Autocomplete responds directly from the in-memory documentation catalog and performs no HTTP requests. Cold caches return empty suggestions; results are limited to 25 choices with bounded labels and values. Each autocomplete callback owns one response bounded by the acknowledgment deadline, and an uncertain transport failure never triggers a second attempt. Submitted options are validated again by the server.
 
 Named documentation lookups use a ten-second request/body deadline, a four-MiB decoded HTML budget and a per-document nesting limit. An unknown heading retains the family-page fallback. HTTP lookup, catalog refresh and embed rendering have separate responsibilities; rendering performs no network access. Upstream failures complete the deferred command with a clear error.
+
+## Attachments
+
+Log uploads are limited to **4 MiB** and replay uploads to **64 MiB**, enforced against actual downloaded bytes as well as attachment metadata. Downloads and processing have a 30-second budget and support cancellation. Only HTTPS Discord CDN attachment URLs are accepted, and redirects are rejected.
+
+Archives use generated GUID filenames in the configured storage folders. Failed or cancelled transfers remove partial files; completed archives are retained. No automatic retention policy has been added, so operators should manage storage capacity. Replay parsing also limits metadata to 1 MiB, nesting to 32 levels and players to 64, with bounded fields and parsing work.
 
 ## Registering application commands
 
@@ -122,18 +146,14 @@ dotnet run --project src/Orabot.Hosts.ConsoleHost -c Release --no-build -- comma
 dotnet run --project src/Orabot.Hosts.ConsoleHost -c Release --no-build -- commands register --global
 ```
 
-Both commands use the normal configuration sources, including `DOTNET_ENVIRONMENT` and `ORABOT_BotToken`. There is no token argument. The registration process loads the modules and their documentation services without starting the Gateway or polling workers.
+Both commands use the normal configuration sources, including `DOTNET_ENVIRONMENT` and `ORABOT_BotToken`. There is no token argument. The registration process loads all command modules and their services without starting the Gateway, shared queue or polling workers.
 
 Registration calls `InteractionService.RegisterCommandsToGuildAsync` or `RegisterCommandsGloballyAsync` with `deleteMissing: false`. Discord.Net builds the command definitions and performs the update. Its registration API uses a bulk overwrite, retains extra remote commands by name, and writes even when definitions are unchanged. A remote command of a different type sharing a local command's name is not preserved by that SDK comparison. Use a dedicated test guild to verify the result before global registration.
 
 The SDK registration APIs do not accept cancellation tokens. Ctrl+C requests cancellation, but an in-flight registration is awaited before its REST client is disposed and may already have updated Discord.
 
-Global modules allow guild and bot-DM contexts with guild installation; user installation is not enabled. Offline export, deployment plans, fingerprints and pruning are no longer custom bot responsibilities.
+Commands use guild installation. Information/documentation commands, `/help` and `/hi` permit guild and bot-DM contexts; `/say`, role and quote commands are guild-only. User installation is not enabled. Offline export, deployment plans, fingerprints and pruning are no longer custom bot responsibilities.
 
-## Subsequent modernization
+## Remaining rollout
 
-Stage 4 migrates the remaining prefix commands (`help`, `hi`, `say`, `quote` and `role`) and completes ownership/bounds for remaining message, quote and attachment work. Legacy `WebClient` and `Uri.EscapeUriString` warnings remain in that code. Stage 5 covers the operational finish and live test-guild rollout verification.
-
-### Temporary configuration bridge
-
-`LegacyFeatureOptions` and its validator now cover only remaining legacy GitHub-icon, role and log/replay-storage settings read through `IConfiguration`. Documentation owns its typed options and validation. As each remaining feature migrates, move its validation and test cases into that feature and remove its entries from the bridge. Remove the bridge and its tests after its final consumer is migrated; ordinary startup validation remains.
+Stage 4's command migration and bounded message, quote, reaction and attachment processing are complete. Stage 5 covers the operational finish and live test-guild rollout verification, including transport shutdown and configured role/channel permissions. No live command registration has been performed as part of this work.

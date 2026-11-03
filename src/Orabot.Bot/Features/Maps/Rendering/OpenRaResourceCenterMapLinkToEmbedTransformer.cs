@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -56,25 +58,29 @@ namespace Orabot.Bot.Features.Maps.Rendering
 			if (mapInfo?.Title == null || mapInfo.Author == null)
 				return null;
 
-			var bounds = mapInfo.Bounds.Split(',').Select(int.Parse).ToArray();
-			var size = $"{bounds[2]}x{bounds[3]}";
+			var bounds = (mapInfo.Bounds ?? string.Empty).Split(',');
+			if (bounds.Length != 4 || !int.TryParse(bounds[2], out var width) || !int.TryParse(bounds[3], out var height) || width <= 0 || height <= 0)
+				return null;
+			var size = $"{width}x{height}";
 			var color = await GetColor($"mod_{mapInfo.GameMod}", cancellationToken);
 			var number = mapInfo.Id;
 
 			var url = $"{BaseUrl}/maps/{number}";
-			var description = mapInfo.Info.Length > 250 ? mapInfo.Info.Substring(0, 250) + "..." : mapInfo.Info;
-			var authorUrl = Uri.EscapeUriString($"{BaseUrl}/maps/author/{mapInfo.Author}/");
+			var info = mapInfo.Info ?? string.Empty;
+			var description = info.Length > 250 ? info[..250] + "..." : info;
+			var authorUrl = $"{BaseUrl}/maps/author/{Uri.EscapeDataString(mapInfo.Author)}/";
 			var minimapUrl = $"{BaseUrl}/maps/{number}/minimap";
 
+			var title = $"{mapInfo.Title}\n({(mapInfo.GameMod ?? string.Empty).ToUpperInvariant()}, {mapInfo.Players} players, {size})";
 			var embed = new EmbedBuilder
 			{
-				Title = $"{mapInfo.Title}\n({mapInfo.GameMod.ToUpper()}, {mapInfo.Players} players, {size})",
+				Title = title.Length > 256 ? title[..256] : title,
 				ThumbnailUrl = minimapUrl,
 				Url = url,
 				Description = description,
 				Author = new EmbedAuthorBuilder
 				{
-					Name = mapInfo.Author,
+					Name = mapInfo.Author.Length > 256 ? mapInfo.Author[..256] : mapInfo.Author,
 					Url = authorUrl
 				},
 				Footer = new EmbedFooterBuilder
@@ -94,18 +100,10 @@ namespace Orabot.Bot.Features.Maps.Rendering
 			var request = new RestRequest(stylesheetLink);
 			var response = await _restClient.GetAsync(request, cancellationToken);
 
-			if (response.Content == null || !response.Content.Contains(modIdentifier))
-				return null;
-
-			var hexColor = response.Content.Substring(response.Content.IndexOf(modIdentifier, StringComparison.Ordinal));
-			hexColor = hexColor.Substring(hexColor.IndexOf('#'));
-			hexColor = hexColor.Substring(1, hexColor.IndexOf(';') - 1);
-
-			var r = Convert.ToInt32(hexColor.Substring(0, 2), 16);
-			var g = Convert.ToInt32(hexColor.Substring(2, 2), 16);
-			var b = Convert.ToInt32(hexColor.Substring(4, 2), 16);
-
-			return new Color(r, g, b);
+			var match = Regex.Match(response.Content ?? string.Empty, Regex.Escape(modIdentifier) + @"[^}]*#(?<hex>[0-9a-fA-F]{6})",
+				RegexOptions.Singleline, TimeSpan.FromMilliseconds(250));
+			return match.Success && uint.TryParse(match.Groups["hex"].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var color)
+				? new Color(color) : null;
 		}
 
 		#endregion

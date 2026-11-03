@@ -1,9 +1,10 @@
+using System.Threading;
 ﻿using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using Orabot.Bot.Discord.Messages;
 using Orabot.Bot.Features.GitHubReferences.Models;
 using RestSharp;
@@ -32,14 +33,14 @@ namespace Orabot.Bot.Features.GitHubReferences.Messages
 			{ "merged", Color.Purple }
 		};
 
-		internal BaseGitHubIssueNumberMessageHandler(IRestClient restClient, IConfiguration configuration)
+		internal BaseGitHubIssueNumberMessageHandler(IRestClient restClient, IOptions<GitHubReferenceOptions> options)
 		{
 			_restClient = restClient;
 
-			_issueIconBaseUrl = configuration["GitHubIconsBaseUrl"];
+			_issueIconBaseUrl = options.Value.GitHubIconsBaseUrl;
 		}
 
-		public override async Task InvokeAsync(SocketUserMessage message)
+		public override async Task InvokeAsync(IUserMessage message, CancellationToken cancellationToken = default)
 		{
 			foreach (var number in GetMatchedNumbers(message.Content))
 			{
@@ -48,7 +49,7 @@ namespace Orabot.Bot.Features.GitHubReferences.Messages
 				request.AddUrlSegment("RepositoryName", RepositoryName);
 				request.AddUrlSegment("number", number);
 
-				var issue = await _restClient.GetAsync<GitHubIssueResponse>(request);
+				var issue = await _restClient.GetAsync<GitHubIssueResponse>(request, cancellationToken);
 				if (issue?.HtmlUrl == null)
 				{
 					continue;
@@ -63,7 +64,7 @@ namespace Orabot.Bot.Features.GitHubReferences.Messages
 					embedFields.Add(new EmbedFieldBuilder
 					{
 						Name = "Labels:",
-						Value = labels,
+						Value = labels.Length > 1024 ? labels[..1024] : labels,
 						IsInline = true
 					});
 				}
@@ -77,13 +78,13 @@ namespace Orabot.Bot.Features.GitHubReferences.Messages
 					pullRequest.AddUrlSegment("RepositoryName", RepositoryName);
 					pullRequest.AddUrlSegment("number", number);
 
-					var pull = await _restClient.GetAsync<GitHubPullRequestResponse>(pullRequest);
+					var pull = await _restClient.GetAsync<GitHubPullRequestResponse>(pullRequest, cancellationToken);
 					if (pull != null)
 					{
 						embedFields.Add(new EmbedFieldBuilder
 						{
 							Name = "Status:",
-							Value = pull.IsMerged ? "merged" : pull.MergeableState,
+							Value = pull.IsMerged ? "merged" : pull.MergeableState ?? "unknown",
 							IsInline = true
 						});
 
@@ -93,17 +94,18 @@ namespace Orabot.Bot.Features.GitHubReferences.Messages
 							embedFields.Add(new EmbedFieldBuilder
 							{
 								Name = "Merged by:",
-								Value = pull.MergedBy?.LoginName,
+								Value = pull.MergedBy?.LoginName ?? "unknown",
 								IsInline = true
 							});
 						}
 					}
 				}
 
-				var description = issue.Body.Length > 250 ? issue.Body[..250] + "..." : issue.Body;
+				var body = issue.Body ?? string.Empty;
+				var description = body.Length > 250 ? body[..250] + "..." : body;
 				var embed = new EmbedBuilder
 				{
-					Title = issue.Title,
+					Title = issue.Title?.Length > 256 ? issue.Title[..256] : issue.Title,
 					ThumbnailUrl = issue.User?.AvatarUrl,
 					Url = issue.HtmlUrl,
 					Description = description,
@@ -119,10 +121,10 @@ namespace Orabot.Bot.Features.GitHubReferences.Messages
 						Text = $"Created at {issue.CreatedAt}"
 					},
 					Timestamp = issue.UpdatedAt,
-					Color = _colorPerStatus[status]
+					Color = _colorPerStatus.TryGetValue(status ?? string.Empty, out var color) ? color : null
 				};
 
-				await message.Channel.SendMessageAsync("", embed: embed.Build());
+				await message.Channel.SendMessageAsync("", embed: embed.Build(), allowedMentions: AllowedMentions.None, options: new RequestOptions { CancelToken = cancellationToken });
 			}
 		}
 

@@ -58,10 +58,9 @@ namespace Orabot.Hosts.ConsoleHost
 				return 2;
 			}
 			using var client = new DiscordRestClient();
-			builder.Services.AddInteractionFramework(client).AddDocumentationFeature(builder.Configuration)
+			builder.Services.AddInteractionFramework(client).AddCommandFeatures(builder.Configuration)
 				.AddSingleton(TimeProvider.System);
 			using var host = builder.Build();
-			OrabotConfiguration.Validate(host.Services);
 			var interactions = host.Services.GetRequiredService<InteractionService>();
 			await interactions.AddModulesAsync(typeof(global::Orabot.Bot.Discord.Bot).Assembly, host.Services);
 			cancellationToken.ThrowIfCancellationRequested();

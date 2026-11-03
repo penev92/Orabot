@@ -3,12 +3,10 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Discord;
-using Discord.Commands;
 using Discord.WebSocket;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Orabot.Bot.Discord;
-using Orabot.Bot.Discord.Commands;
 using Orabot.Bot.Discord.Interactions;
 using Orabot.Bot.Discord.Logging;
 using Orabot.Bot.Discord.Messages;
@@ -27,7 +25,6 @@ namespace Orabot.Tests.Discord
 			await fixture.Bot.StopAsync(CancellationToken.None);
 			await fixture.Bot.StopAsync(CancellationToken.None);
 			Assert.Equal(new[] { "login", "start", "stop", "logout" }, fixture.Connection.Calls);
-			Assert.NotEmpty(fixture.Commands.Search("probe").Commands);
 			await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Bot.StartAsync(CancellationToken.None));
 		}
 
@@ -124,7 +121,6 @@ namespace Orabot.Tests.Discord
 		private sealed class Fixture : IDisposable
 		{
 			private readonly DiscordSocketClient _client = new();
-			public CommandService Commands { get; } = new();
 			public FakeConnection Connection { get; } = new();
 			public DiscordReadiness Readiness { get; } = new();
 			public DiscordBot Bot { get; }
@@ -132,21 +128,14 @@ namespace Orabot.Tests.Discord
 			public Fixture()
 			{
 				var handlers = new NoOpHandlers();
-				Bot = new DiscordBot(_client, Commands, new EmptyServices(), Array.Empty<BaseTypeReader>(),
-					new ModuleBase<SocketCommandContext>[] { new LifecycleProbeModule() }, handlers, handlers, handlers, handlers,
+				Bot = new DiscordBot(_client, handlers, handlers, handlers, handlers,
 					Readiness, Options.Create(new DiscordBotOptions { BotToken = "synthetic-test-token" }), NullLogger<DiscordBot>.Instance, Connection);
 			}
 
 			public void Dispose()
 			{
-				((IDisposable)Commands).Dispose();
 				_client.Dispose();
 			}
-		}
-
-		private sealed class EmptyServices : IServiceProvider
-		{
-			public object? GetService(Type serviceType) => null;
 		}
 
 		private sealed class FakeConnection : IDiscordConnectionLifecycle
@@ -172,9 +161,4 @@ namespace Orabot.Tests.Discord
 		}
 	}
 
-	public class LifecycleProbeModule : ModuleBase<SocketCommandContext>
-	{
-		[Command("probe")]
-		public Task Probe() => Task.CompletedTask;
-	}
 }

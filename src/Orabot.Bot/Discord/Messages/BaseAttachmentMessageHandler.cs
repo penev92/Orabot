@@ -1,6 +1,8 @@
-﻿using System.Linq;
+using Discord;
+using System;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
-using Discord.WebSocket;
 
 namespace Orabot.Bot.Discord.Messages
 {
@@ -8,11 +10,9 @@ namespace Orabot.Bot.Discord.Messages
 	{
 		protected abstract string FileExtension { get; }
 
-		public virtual bool CanHandle(SocketUserMessage message)
-		{
-			return message.Attachments.Count != 0 && message.Attachments.Any(x => x.Filename.EndsWith(FileExtension));
-		}
+		public virtual bool CanHandle(IUserMessage message) => message.Attachments.Any(attachment =>
+			attachment.Filename?.EndsWith(FileExtension, StringComparison.Ordinal) == true);
 
-		public abstract Task InvokeAsync(SocketUserMessage message);
+		public abstract Task InvokeAsync(IUserMessage message, CancellationToken cancellationToken = default);
 	}
 }

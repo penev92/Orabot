@@ -1,3 +1,8 @@
+using System.IO;
+using System.Net;
+using Orabot.Bot.Infrastructure.Attachments;
+using Orabot.Bot.Features.GitHubReferences;
+using Orabot.Bot.Discord.BackgroundWork;
 using System;
 using System.Globalization;
 using System.Text.Json;
@@ -6,16 +11,13 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Discord;
-using Discord.Commands;
 using Discord.WebSocket;
 using Orabot.Bot.Discord;
 using Orabot.Bot.Features.Quotes;
-using Orabot.Bot.Infrastructure.Configuration;
 using RestSharp;
 using RestSharp.Serializers.Json;
 using System.Net.Http;
 using System.Threading;
-using Orabot.Bot.Discord.Commands;
 using Orabot.Bot.Discord.Interactions;
 using Orabot.Bot.Discord.Logging;
 using Orabot.Bot.Discord.Messages;
@@ -49,27 +51,21 @@ namespace Orabot.Bot.DependencyInjection
 						GatewayIntents.DirectMessageReactions | GatewayIntents.MessageContent,
 					MessageCacheSize = provider.GetRequiredService<IOptions<DiscordBotOptions>>().Value.MessageCacheSize
 				}))
-				.AddSingleton<CommandService>()
 				.AddInteractionFramework(provider => provider.GetRequiredService<DiscordSocketClient>().Rest)
-				.AddSingleton<InteractionWorkQueue>()
+				.AddSingleton<BotWorkQueue>()
 				.AddSingleton<IInteractionDispatcher, InteractionDispatcher>()
-				.AddSingleton<BaseTypeReader, UriTypeReader>()
-				.AddSingleton<BaseTypeReader, DiscordMessageIdentifierTypeReader>()
 				.AddDefaultEventHandlerServices()
 				.AddDefaultCustomMessageHandlers()
-				.AddSingleton<ModuleBase<SocketCommandContext>, GeneralModule>()
-				.AddSingleton<ModuleBase<SocketCommandContext>, QuoteModule>()
-				.AddSingleton<ModuleBase<SocketCommandContext>, RoleManagementModule>()
-				.AddSingleton<QuotingService>()
 				.AddDefaultTransformers()
 				.AddSingleton<IRestClient>(_ =>
 				{
 					var serializationOptions = new JsonSerializerOptions();
 					serializationOptions.Converters.Add(new CustomDateTimeConverter());
-					return new RestClient(new RestClientOptions(),
+					return new RestClient(new RestClientOptions { Timeout = TimeSpan.FromSeconds(15) },
 						configureSerialization: s => s.UseSystemTextJson(serializationOptions));
 				})
-				.AddDocumentationFeature(configuration)
+				.AddCommandFeatures(configuration)
+				.AddAttachmentDownloads()
 				.AddResourceCenterIntegration()
 				.AddYamlDeserializer()
 				.AddSingleton(TimeProvider.System)
@@ -77,7 +73,7 @@ namespace Orabot.Bot.DependencyInjection
 				.AddSingleton<DiscordReadiness>()
 				// Reverse stop order lets polling workers finish before the connection is closed.
 				.AddHostedService<global::Orabot.Bot.Discord.Bot>()
-				.AddHostedService(provider => provider.GetRequiredService<InteractionWorkQueue>())
+				.AddHostedService(provider => provider.GetRequiredService<BotWorkQueue>())
 				.AddLongRunningServices();
 		}
 
@@ -104,9 +100,44 @@ namespace Orabot.Bot.DependencyInjection
 				.Validate(options => !string.IsNullOrWhiteSpace(options.ChannelName), "MapAnnouncer:ChannelName must be configured.")
 				.Validate(options => options.ScanInterval > 0, "MapAnnouncer:ScanInterval must be positive milliseconds.")
 				.ValidateOnStart();
-			services.AddSingleton<IValidateOptions<LegacyFeatureOptions>, LegacyFeatureOptionsValidator>();
-			services.AddOptions<LegacyFeatureOptions>().Bind(configuration).ValidateOnStart();
+			services.AddOptions<GitHubReferenceOptions>().Bind(configuration)
+				.Validate(options => IsHttpUrl(options.GitHubIconsBaseUrl), "GitHubIconsBaseUrl").ValidateOnStart();
+			services.AddOptions<LogOptions>().Bind(configuration)
+				.Validate(options => IsStoragePath(options.LogStorageFolder), "LogStorageFolder").ValidateOnStart();
+			services.AddOptions<ReplayOptions>().Bind(configuration)
+				.Validate(options => IsStoragePath(options.ReplayStorageFolder), "ReplayStorageFolder").ValidateOnStart();
 			return services;
+		}
+
+		/// <summary>Registers concrete command dependencies for both bot startup and explicit SDK registration.</summary>
+		public static IServiceCollection AddCommandFeatures(this IServiceCollection services, IConfiguration configuration)
+		{
+			services.AddOptions<TrustedRoleOptions>().Bind(configuration);
+			services.AddSingleton<IValidateOptions<RolesOptions>, RolesOptionsValidator>();
+			services.AddOptions<RolesOptions>().Bind(configuration).ValidateOnStart();
+			return services.AddSingleton<RoleAssignmentService>().AddSingleton<QuotingService>().AddDocumentationFeature(configuration);
+		}
+
+		static IServiceCollection AddAttachmentDownloads(this IServiceCollection services)
+		{
+			services.AddHttpClient(AttachmentDownloader.ClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
+				.ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+				{
+					AllowAutoRedirect = false,
+					AutomaticDecompression = DecompressionMethods.None,
+					PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+				}).SetHandlerLifetime(Timeout.InfiniteTimeSpan);
+			return services.AddSingleton<AttachmentDownloader>();
+		}
+
+		static bool IsHttpUrl(string value) => Uri.TryCreate(value, UriKind.Absolute, out var uri)
+			&& (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) && !string.IsNullOrEmpty(uri.Host) && string.IsNullOrEmpty(uri.UserInfo);
+
+		static bool IsStoragePath(string value)
+		{
+			if (string.IsNullOrWhiteSpace(value) || value.IndexOfAny(Path.GetInvalidPathChars()) >= 0) return false;
+			try { _ = Path.GetFullPath(value); return true; }
+			catch (Exception exception) when (exception is ArgumentException or NotSupportedException or IOException) { return false; }
 		}
 
 		public static IServiceCollection AddDefaultEventHandlerServices(this IServiceCollection serviceCollection)
@@ -130,7 +161,6 @@ namespace Orabot.Bot.DependencyInjection
 				.AddSingleton<ICustomMessageHandler, OpenRaResourceCenterMapLinkMessageHandler>()
 				.AddSingleton<ICustomMessageHandler, LogFileAttachmentMessageHandler>()
 				.AddSingleton<ICustomMessageHandler, ReplayFileAttachmentMessageHandler>()
-				.AddSingleton<ICustomMessageHandler, BaseCommandMessageHandler>()
 				.AddSingleton<ICustomMessageHandler, BaseModTimerMessageHandler>()
 				.AddSingleton<ICustomMessageHandler, StackTraceMessageHandler>();
 		}
@@ -149,6 +179,7 @@ namespace Orabot.Bot.DependencyInjection
 			return serviceCollection.AddSingleton(deserializer =>
 				new DeserializerBuilder()
 					.IgnoreUnmatchedProperties()
+					.WithDuplicateKeyChecking()
 					.WithTypeConverter(new DateTimeConverter(DateTimeKind.Utc, CultureInfo.InvariantCulture, false, "yyyy-MM-dd HH-mm-ss"))
 					.Build()
 			);

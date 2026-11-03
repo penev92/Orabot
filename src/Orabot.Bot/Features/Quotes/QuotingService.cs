@@ -1,274 +1,183 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using Discord;
-using Discord.WebSocket;
+using Discord.Net;
+using Microsoft.Extensions.Options;
+using Orabot.Bot.Features.General;
 
 namespace Orabot.Bot.Features.Quotes
 {
-	public class QuotingService
+	/// <summary>Resolves same-guild quote sources with requester/bot authorization and bounded asynchronous reads.</summary>
+	public sealed class QuotingService
 	{
-		public bool TryGetGuild(IDiscordClient discordClient, ulong guildId, out SocketGuild guild)
+		internal const int MaximumSearchChannels = 50;
+		private readonly TrustedRoleOptions _trustedRoles;
+
+		/// <summary>Uses the existing role-name allowlist for user-authored custom quotations.</summary>
+		public QuotingService(IOptions<TrustedRoleOptions> trustedRoles) => _trustedRoles = trustedRoles.Value;
+
+		/// <summary>Builds one quote or a same-author range, using at most fifty channels and twenty-five following messages.</summary>
+		public async Task<Embed> CreateMessageQuoteAsync(IGuild guild, IUser requester, string message,
+			string end = null, ITextChannel channel = null, ITextChannel currentChannel = null, CancellationToken cancellationToken = default)
 		{
-			guild = discordClient.GetGuildAsync(guildId).Result as SocketGuild;
-			return guild != null;
-		}
-
-		public bool TryGetChannel(SocketGuild guild, ulong channelId, out SocketTextChannel channel)
-		{
-			foreach (var socketGuildChannel in guild.Channels)
+			if (guild == null || requester == null)
+				throw new ArgumentException("Message quotes can only be used in a server.");
+			if (!DiscordMessageIdentifier.TryParse(message, out var first))
+				throw new ArgumentException("Use a message ID, channel-ID-message-ID pair or Discord message link.");
+			DiscordMessageIdentifier last = null;
+			if (end != null && !DiscordMessageIdentifier.TryParse(end, out last))
+				throw new ArgumentException("The end message identifier is invalid.");
+			ValidateGuild(first, guild);
+			if (last != null)
 			{
-				if (socketGuildChannel is SocketTextChannel tmpChannel && tmpChannel.Id == channelId)
-				{
-					channel = tmpChannel;
-					return true;
-				}
+				ValidateGuild(last, guild);
+				if (last.MessageId < first.MessageId)
+					throw new ArgumentException("The end message must not precede the first message.");
 			}
+			if (channel != null && (channel.GuildId != guild.Id || (first.ChannelId.HasValue && first.ChannelId.Value != channel.Id)))
+				throw new ArgumentException("Choose a source channel in this server that matches the message identifier.");
 
-			channel = null;
-			return false;
-		}
+			using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			budget.CancelAfter(TimeSpan.FromSeconds(10));
+			var token = budget.Token;
+			token.ThrowIfCancellationRequested();
+			var options = new RequestOptions { CancelToken = token };
+			var invoker = await ResolveRequesterAsync(guild, requester, options);
+			var bot = await guild.GetCurrentUserAsync(CacheMode.AllowDownload, options);
+			if (bot == null || bot.GuildId != guild.Id)
+				throw new UnauthorizedAccessException("The quote source is unavailable or its history cannot be read.");
 
-		public bool TryGetChannel(SocketGuild guild, string channelMention, out SocketTextChannel channel)
-		{
-			foreach (var socketGuildChannel in guild.Channels)
+			ITextChannel source;
+			IMessage firstMessage;
+			if (first.ChannelId.HasValue || channel != null)
 			{
-				if (socketGuildChannel is SocketTextChannel tmpChannel && tmpChannel.Mention == channelMention)
-				{
-					channel = tmpChannel;
-					return true;
-				}
+				source = channel ?? await guild.GetTextChannelAsync(first.ChannelId.Value, CacheMode.AllowDownload, options);
+				RequireReadable(source, guild, invoker, bot);
+				firstMessage = await ReadMessageAsync(source, first.MessageId, options);
 			}
-
-			channel = null;
-			return false;
-		}
-
-		public bool TryGetMessage(SocketGuild guild, IUser currentUser, ulong messageId, out IMessage message, SocketTextChannel preferredChannel = null)
-		{
-			var channels = new List<SocketTextChannel>(guild.TextChannels);
-			if (preferredChannel != null)
+			else
 			{
-				channels.Insert(0, preferredChannel);
+				(source, firstMessage) = await FindMessageAsync(guild, invoker, bot, first.MessageId, currentChannel, options);
 			}
+			if (firstMessage == null || source == null)
+				throw new ArgumentException("No such message was found in the accessible channels searched in this server.");
+			if (firstMessage.Id != first.MessageId)
+				throw new ArgumentException("The source returned an unexpected message.");
+			if (last?.ChannelId != null && last.ChannelId.Value != source.Id)
+				throw new ArgumentException("Both range endpoints must belong to the same source channel.");
 
-			foreach (var channel in channels)
+			var messages = new List<IMessage> { firstMessage };
+			if (last != null && last.MessageId != first.MessageId)
 			{
-				if (!channel.Users.Any(x => x.Username == currentUser.Username && x.DiscriminatorValue == currentUser.DiscriminatorValue))
+				// The existing range budget is the first message plus at most 25 following messages.
+				var following = new List<IMessage>();
+				RequireReadable(source, guild, invoker, bot);
+				await foreach (var page in source.GetMessagesAsync(first.MessageId, Direction.After, 25, CacheMode.AllowDownload, options).WithCancellation(token))
 				{
-					continue;
-				}
-
-				message = channel.GetMessageAsync(messageId).Result;
-				if (message != null)
-				{
-					return true;
-				}
-			}
-
-			message = null;
-			return false;
-		}
-
-		public async Task<List<IMessage>> GetMessageList(SocketTextChannel channel, ulong firstMessageId, ulong lastMessageId)
-		{
-			var firstMessage = await channel.GetMessageAsync(firstMessageId);
-			if (firstMessage == null)
-			{
-				return new List<IMessage>();
-			}
-
-			var downloadedMessages = channel.GetMessagesAsync(firstMessageId, Direction.After, 25);
-			var firstPage = (await downloadedMessages.FirstAsync()).ToArray();
-
-			var messages = new List<IMessage>
-			{
-				firstMessage
-			};
-
-			for (var i = firstPage.Length - 1; i >= 0; i--)
-			{
-				if (firstPage[i].Author.Id == firstMessage.Author.Id)
-				{
-					messages.Add(firstPage[i]);
-				}
-
-				if (firstPage[i].Id == lastMessageId)
-				{
+					token.ThrowIfCancellationRequested();
+					following.AddRange(page.Take(25));
 					break;
 				}
+				foreach (var item in following.Where(item => item.Id > first.MessageId && item.Id <= last.MessageId).OrderBy(item => item.Id))
+					if (item.Author.Id == firstMessage.Author.Id)
+						messages.Add(item);
 			}
-
-			return messages;
+			// Recheck permissions after awaited reads, before presenting retrieved content elsewhere.
+			RequireReadable(source, guild, invoker, bot);
+			return QuoteEmbedRenderer.CreateSourceEmbed(guild.Id, source, messages);
 		}
-		
-		public Embed CreateEmbed(SocketGuild guild, string message)
+
+		/// <summary>Builds trusted custom text with explicit author, source channel and free-form timestamp options.</summary>
+		public async Task<Embed> CreateCustomQuoteAsync(IGuild guild, IUser requester, string text, string author = null,
+			ITextChannel channel = null, string timestamp = null, CancellationToken cancellationToken = default)
 		{
-			var lines = message.Split('\n').ToList();
-
-			if (TryGetChannel(guild, lines[0].Trim(), out var referredChannel))
+			if (guild == null || requester == null)
+				throw new ArgumentException("Custom quotes can only be used in a server.");
+			if (string.IsNullOrWhiteSpace(text) || text.Length > 4096 || (author?.Length ?? 0) > 256 || (timestamp?.Length ?? 0) > 256)
+				throw new ArgumentException("Quote text must contain 1–4096 characters; author and timestamp allow up to 256 characters each.");
+			using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			budget.CancelAfter(TimeSpan.FromSeconds(10));
+			var token = budget.Token;
+			token.ThrowIfCancellationRequested();
+			var options = new RequestOptions { CancelToken = token };
+			var invoker = await ResolveRequesterAsync(guild, requester, options);
+			if (!_trustedRoles.IsTrusted(invoker, guild))
+				throw new UnauthorizedAccessException("No rights! Custom quotes require a configured trusted role.");
+			if (channel != null)
 			{
-				lines.RemoveAt(0);
+				var bot = await guild.GetCurrentUserAsync(CacheMode.AllowDownload, options);
+				RequireReadable(channel, guild, invoker, bot);
 			}
-
-			if (TryGetQuoteAuthorAndTimestamp(lines[0].Trim(), referredChannel, out var author, out var authorName, out var timestamp))
-			{
-				lines.RemoveAt(0);
-			}
-
-			var embed = new EmbedBuilder
-			{
-				Color = Color.Blue,
-				Author = BuildAuthorEmbed(author, authorName),
-				Description = string.Join("\n", lines),
-				Footer = BuildFooterEmbed(referredChannel, timestamp)
-			};
-
-			return embed.Build();
+			return QuoteEmbedRenderer.CreateCustomEmbed(text, author, channel, timestamp);
 		}
 
-		public Embed CreateEmbed(IMessage message)
+		private static void ValidateGuild(DiscordMessageIdentifier identifier, IGuild guild)
 		{
-			var author = message.Author;
-			var authorName = (author as SocketGuildUser)?.Nickname ?? author.Username;
-			var referredChannel = message.Channel;
-			var timestamp = message.Timestamp.ToString("s").Replace('T', ' ') + " UTC";
-			var descriptionText = $"{message.Content}\n\n[Original message]({message.GetJumpUrl()})";
-			var imageUrl = message.Attachments.FirstOrDefault()?.Url;
-			if (imageUrl == null)
-			{
-				if (Uri.TryCreate(message.Content, UriKind.Absolute, out var url))
-				{
-					imageUrl = url.AbsoluteUri;
-				}
-			}
-
-			var embed = new EmbedBuilder
-			{
-				Color = Color.Blue,
-				Author = BuildAuthorEmbed(author, authorName),
-				Description = descriptionText,
-				Footer = BuildFooterEmbed(referredChannel, timestamp),
-				ImageUrl = imageUrl
-			};
-
-			return embed.Build();
+			if (identifier.GuildId.HasValue && identifier.GuildId.Value != guild.Id)
+				throw new ArgumentException("Cross-server quotes are not supported. Choose a message from this server.");
 		}
 
-		public Embed CreateEmbed(IList<IMessage> messages)
+		private static async Task<IGuildUser> ResolveRequesterAsync(IGuild guild, IUser requester, RequestOptions options)
 		{
-			var message = messages.First();
-			var author = message.Author;
-			var authorName = (author as SocketGuildUser)?.Nickname ?? author.Username;
-			var referredChannel = message.Channel;
-			var timestamp = message.Timestamp.ToString("s").Replace('T', ' ') + " UTC";
-			var descriptionText = $"{string.Join("\n", messages.Select(x => x.Content))}\n\n[Original message]({message.GetJumpUrl()})";
-			var imageUrl = message.Attachments.FirstOrDefault()?.Url;
-			if (imageUrl == null)
-			{
-				if (Uri.TryCreate(message.Content, UriKind.Absolute, out var url))
-				{
-					imageUrl = url.AbsoluteUri;
-				}
-			}
-
-			var embed = new EmbedBuilder
-			{
-				Color = Color.Blue,
-				Author = BuildAuthorEmbed(author, authorName),
-				Description = descriptionText,
-				Footer = BuildFooterEmbed(referredChannel, timestamp),
-				ImageUrl = imageUrl
-			};
-
-			return embed.Build();
+			var member = requester as IGuildUser;
+			if (member?.GuildId != guild.Id)
+				member = await guild.GetUserAsync(requester.Id, CacheMode.AllowDownload, options);
+			if (member == null || member.GuildId != guild.Id)
+				throw new UnauthorizedAccessException("Your membership in the source server could not be verified.");
+			return member;
 		}
 
-		#region Private methods
-
-		private static IEnumerable<IUser> GetChannelUsers(IChannel channel)
+		private static bool CanRead(ITextChannel channel, IGuild guild, IGuildUser requester, IGuildUser bot)
 		{
-			var usersAdapter = channel.GetUsersAsync();
-			var users = usersAdapter.ToListAsync().Result.SelectMany(x => x);
-
-			return users;
+			// Parent channel permissions do not establish private-thread membership.
+			if (channel == null || channel is IThreadChannel { Type: ThreadType.PrivateThread }
+				|| channel.GuildId != guild.Id || requester == null || bot == null
+				|| requester.GuildId != guild.Id || bot.GuildId != guild.Id)
+				return false;
+			var userPermissions = requester.GetPermissions(channel);
+			var botPermissions = bot.GetPermissions(channel);
+			return userPermissions.ViewChannel && userPermissions.ReadMessageHistory
+				&& botPermissions.ViewChannel && botPermissions.ReadMessageHistory;
 		}
 
-		private static Dictionary<string, List<IUser>> GetChannelUsersDictionary(IChannel channel)
+		private static void RequireReadable(ITextChannel channel, IGuild guild, IGuildUser requester, IGuildUser bot)
 		{
-			var users = GetChannelUsers(channel).ToList();
-			var usersByUsername = users.GroupBy(x => x.Username);
-			var usersByNickname = users.Cast<SocketGuildUser>().Where(x => !string.IsNullOrWhiteSpace(x.Nickname)).GroupBy(x => x.Nickname);
-			var usersByNameTmp = usersByNickname.Union(usersByUsername).GroupBy(x => x.Key);
-			var usersByName = usersByNameTmp.ToDictionary(x => x.Key, y => y.SelectMany(z => z).ToList());
-
-			return usersByName;
+			if (!CanRead(channel, guild, requester, bot))
+				throw new UnauthorizedAccessException("The quote source is unavailable or its history cannot be read by both you and Orabot.");
 		}
 
-		private static bool TryGetQuoteAuthorAndTimestamp(string messageLine, IChannel channel, out IUser author, out string authorName, out string timestamp)
+		private static async Task<(ITextChannel Channel, IMessage Message)> FindMessageAsync(IGuild guild, IGuildUser requester,
+			IGuildUser bot, ulong messageId, ITextChannel preferred, RequestOptions options)
 		{
-			var usersByName = GetChannelUsersDictionary(channel);
-
-			foreach (var userList in usersByName)
+			var searched = new HashSet<ulong>();
+			if (preferred != null && CanRead(preferred, guild, requester, bot))
 			{
-				if (messageLine.StartsWith(userList.Key))
-				{
-					author = userList.Value.Count == 1 ? userList.Value.First() : null;
-					authorName = userList.Key;
-
-					var trim = messageLine.Substring(userList.Key.Length);
-					timestamp = trim.Trim();
-
-					return true;
-				}
+				searched.Add(preferred.Id);
+				var preferredMessage = await ReadMessageAsync(preferred, messageId, options);
+				if (preferredMessage != null)
+					return (preferred, preferredMessage);
 			}
-
-			author = null;
-			authorName = null;
-			timestamp = null;
-			return false;
+			var channels = await guild.GetTextChannelsAsync(CacheMode.AllowDownload, options);
+			foreach (var candidate in channels.Where(item => item != null).DistinctBy(item => item.Id)
+				.Where(item => !searched.Contains(item.Id) && CanRead(item, guild, requester, bot))
+				.Take(MaximumSearchChannels - searched.Count))
+			{
+				options.CancelToken.ThrowIfCancellationRequested();
+				var found = await ReadMessageAsync(candidate, messageId, options);
+				if (found != null)
+					return (candidate, found);
+			}
+			return (null, null);
 		}
 
-		private static EmbedAuthorBuilder BuildAuthorEmbed(IUser author, string authorNameToUse)
+		private static async Task<IMessage> ReadMessageAsync(ITextChannel channel, ulong id, RequestOptions options)
 		{
-			if (author == null)
-			{
-				return null;
-			}
-
-			return new EmbedAuthorBuilder
-			{
-				Name = authorNameToUse,
-				IconUrl = author.GetAvatarUrl()
-			};
+			try { return await channel.GetMessageAsync(id, CacheMode.AllowDownload, options); }
+			catch (HttpException exception) when (exception.HttpCode is HttpStatusCode.NotFound or HttpStatusCode.Forbidden) { return null; }
 		}
-
-		private static EmbedFooterBuilder BuildFooterEmbed(IChannel referredChannel, string timestamp)
-		{
-			var footerText = string.Empty;
-
-			if (!string.IsNullOrEmpty(timestamp))
-			{
-				footerText = timestamp;
-			}
-
-			if (referredChannel != null)
-			{
-				if (!string.IsNullOrEmpty(timestamp))
-				{
-					footerText += ", ";
-				}
-
-				footerText += $"in #{referredChannel.Name}";
-			}
-
-			return new EmbedFooterBuilder
-			{
-				Text = footerText
-			};
-		}
-
-		#endregion
 	}
 }

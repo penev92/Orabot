@@ -1,4 +1,5 @@
-﻿using Discord.WebSocket;
+﻿using Discord;
+using System.Threading;
 using Orabot.Bot.Features.Maps.Rendering;
 using System.Threading.Tasks;
 
@@ -6,7 +7,7 @@ namespace Orabot.Bot.Features.Maps.Messages
 {
 	internal class OpenRaResourceCenterMapLinkMessageHandler : BaseLinkParsingMessageHandler
 	{
-		protected override string[] RegexMatchPatterns { get; } = { "https://resource.openra.net/maps/[0-9]+" };
+		protected override string[] RegexMatchPatterns { get; } = { @"https://resource\.openra\.net/maps/[0-9]+" };
 
 		private readonly OpenRaResourceCenterMapLinkToEmbedTransformer _toEmbedTransformer;
 
@@ -15,7 +16,7 @@ namespace Orabot.Bot.Features.Maps.Messages
 			_toEmbedTransformer = toEmbedTransformer;
 		}
 
-		public override async Task InvokeAsync(SocketUserMessage message)
+		public override async Task InvokeAsync(IUserMessage message, CancellationToken cancellationToken = default)
 		{
 			foreach (var matchedLink in GetMatchedLinks(message.Content))
 			{
@@ -25,9 +26,9 @@ namespace Orabot.Bot.Features.Maps.Messages
 					continue;
 				}
 
-				var embed = await _toEmbedTransformer.CreateEmbed(number);
+				var embed = await _toEmbedTransformer.CreateEmbed(number, cancellationToken);
 				if (embed != null)
-					await message.Channel.SendMessageAsync("", embed: embed);
+					await message.Channel.SendMessageAsync("", embed: embed, allowedMentions: AllowedMentions.None, options: new RequestOptions { CancelToken = cancellationToken });
 			}
 		}
 	}

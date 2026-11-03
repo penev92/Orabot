@@ -1,64 +1,60 @@
-﻿using System;
+using Discord;
+using Microsoft.Extensions.Options;
+using Orabot.Bot.Infrastructure.Attachments;
+using System;
 using System.IO;
-using System.Linq;
-using System.Net;
-using Microsoft.Extensions.Configuration;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Orabot.Bot.Features.Logs
 {
-	internal class AttachmentLogFileToMessageTransformer
+	internal sealed record LogAttachmentText(string RawMessage, string FullText);
+
+	internal sealed class AttachmentLogFileToMessageTransformer
 	{
-		private readonly string _logStorageFolder;
+		internal const int MaximumLogBytes = 4 * 1024 * 1024;
+		private readonly AttachmentDownloader _downloader;
+		private readonly string _storageFolder;
 
-		public AttachmentLogFileToMessageTransformer(IConfiguration configuration)
+		public AttachmentLogFileToMessageTransformer(AttachmentDownloader downloader, IOptions<LogOptions> options)
 		{
-			_logStorageFolder = configuration["LogStorageFolder"];
+			_downloader = downloader;
+			_storageFolder = options.Value.LogStorageFolder;
 		}
 
-		internal string CreateRawMessage(global::Discord.Attachment attachment, out string fullText)
+		internal async Task<LogAttachmentText> CreateRawMessageAsync(IAttachment attachment, CancellationToken cancellationToken = default)
 		{
-			var filePath = Path.Combine(_logStorageFolder, $"{Guid.NewGuid()}_{attachment.Filename}");
-
-			using var webClient = new WebClient();
-			webClient.DownloadFile(attachment.Url, filePath);
-
-			fullText = File.ReadAllText(filePath);
-			return string.IsNullOrWhiteSpace(fullText) ? null : $"```{fullText[..Math.Min(1000, fullText.Length)]}```";
+			using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			deadline.CancelAfter(AttachmentDownloader.OperationTimeout);
+			var archived = await _downloader.DownloadAsync(attachment, _storageFolder, MaximumLogBytes, ".log", deadline.Token);
+			var text = await File.ReadAllTextAsync(archived.FilePath, deadline.Token);
+			var message = string.IsNullOrWhiteSpace(text) ? null : $"```{text[..Math.Min(1000, text.Length)]}```";
+			return new LogAttachmentText(message, text);
 		}
 
-		internal bool TryCreateExceptionExplanationMessage(string text, out string explanationMessage)
+		internal bool TryCreateExceptionExplanationMessage(string text, out string explanationMessage, int maximumLength = 2000)
 		{
 			explanationMessage = null;
-
-			var lines = text.Replace("\r\n", "\n").Split("\n");
-			var exceptionLine = lines.LastOrDefault(x => x.Trim().StartsWith("Exception of type "));
-			if (exceptionLine == null || exceptionLine.IndexOf(": ", StringComparison.Ordinal) < 0)
+			if (string.IsNullOrEmpty(text))
 				return false;
 
-			exceptionLine = exceptionLine.Substring(exceptionLine.IndexOf(": ", StringComparison.Ordinal) + 2);
+			ReadOnlySpan<char> lastException = default;
+			foreach (var line in text.AsSpan().EnumerateLines())
+				if (line.Trim().StartsWith("Exception of type ", StringComparison.Ordinal))
+					lastException = line;
+			var separator = lastException.IndexOf(": ", StringComparison.Ordinal);
+			if (lastException.IsEmpty || separator < 0)
+				return false;
 
-			explanationMessage = $"Now, I'm no expert, but I suspect your problem is *probably*  related to this:\r\n> **{exceptionLine}**";
-
-
+			const string prefix = "Now, I'm no expert, but I suspect your problem is *probably*  related to this:\r\n> **";
+			const string suffix = "**";
+			var available = maximumLength - prefix.Length - suffix.Length;
+			if (available < 3)
+				return false;
+			var detail = lastException[(separator + 2)..];
+			var bounded = detail.Length <= available ? detail.ToString() : detail[..(available - 3)].ToString() + "...";
+			explanationMessage = prefix + bounded + suffix;
 			return true;
-		}
-
-		private static bool IsOpenRAStackTraceLine(string line)
-		{
-			return line.StartsWith("   at OpenRA");
-		}
-
-		private static string ExtractPointOfInterest(string line)
-		{
-			try
-			{
-				line = line.Substring(line.IndexOf("   at ") + "   at ".Length);
-				return line.EndsWith(")") ? line : line.Substring(0, line.IndexOf(") ") + 1);
-			}
-			catch (Exception)
-			{
-				return string.Empty;
-			}
 		}
 	}
 }

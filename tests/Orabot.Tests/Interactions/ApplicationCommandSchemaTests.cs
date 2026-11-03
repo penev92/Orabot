@@ -11,7 +11,7 @@ using Orabot.Tests.Documentation;
 
 namespace Orabot.Tests.Interactions;
 
-/// <summary>Checks the ten retained command definitions directly in Discord.Net's metadata model.</summary>
+/// <summary>Checks retained and migrated commands directly in Discord.Net's metadata model.</summary>
 public sealed class ApplicationCommandSchemaTests
 {
 	[Fact]
@@ -19,18 +19,33 @@ public sealed class ApplicationCommandSchemaTests
 	{
 		using var client = new DiscordSocketClient();
 		using var lifetime = new OfflineHostApplicationLifetime();
-		var configuration = new ConfigurationBuilder().AddInMemoryCollection(DocumentationOptionsTests.ValidSettings()).Build();
+		var settings = DocumentationOptionsTests.ValidSettings();
+		settings["TrustedRoles"] = "";
+		settings["FreelyAssignedRoles"] = "";
+		settings["FreelyAssignedRolesByEmote"] = "";
+		settings["RoleAssignmentMessageId"] = "0";
+		var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
 		using var services = new ServiceCollection().AddLogging().AddSingleton<IHostApplicationLifetime>(lifetime)
-			.AddSingleton(TimeProvider.System).AddDocumentationFeature(configuration)
+			.AddSingleton(TimeProvider.System).AddCommandFeatures(configuration)
 			.AddInteractionFramework(client.Rest).BuildServiceProvider();
 		var framework = services.GetRequiredService<InteractionService>();
 		await framework.AddModulesAsync(typeof(OpenRaInformationModule).Assembly, services);
 		var commands = framework.SlashCommands.ToDictionary(command => command.Name);
 
-		Assert.Equal(Descriptions.Keys.OrderBy(name => name, StringComparer.Ordinal), commands.Keys.OrderBy(name => name, StringComparer.Ordinal));
+		Assert.Equal(16, commands.Count);
+		Assert.All(framework.SlashCommands, command => Assert.Equal(RunMode.Sync, command.RunMode));
+		Assert.All(framework.ContextCommands, command => Assert.Equal(RunMode.Sync, command.RunMode));
+		Assert.Contains("help", commands.Keys);
+		Assert.Contains("hi", commands.Keys);
+		Assert.Contains("say", commands.Keys);
+		Assert.Contains("role", commands.Keys);
+		Assert.Equal("quote", commands["message"].Module.SlashGroupName);
+		Assert.Equal("quote", commands["custom"].Module.SlashGroupName);
+		Assert.Equal("Quote message", Assert.Single(framework.ContextCommands).Name);
 		Assert.Equal(4, framework.Modules.SelectMany(module => module.AutocompleteCommands).Count());
-		foreach (var (name, command) in commands)
+		foreach (var name in Descriptions.Keys)
 		{
+			var command = commands[name];
 			Assert.Equal(Descriptions[name], command.Description);
 			Assert.Equal(new[] { ApplicationIntegrationType.GuildInstall }, command.IntegrationTypes);
 			Assert.Equal(new[] { InteractionContextType.Guild, InteractionContextType.BotDm }, command.ContextTypes.OrderBy(value => value));

@@ -1,44 +1,39 @@
-﻿using System.Linq;
-using System.Threading.Tasks;
-using Discord.WebSocket;
+using Discord;
 using Orabot.Bot.Discord.Messages;
+using Orabot.Bot.Infrastructure.Attachments;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Orabot.Bot.Features.Replays
 {
-	internal class ReplayFileAttachmentMessageHandler : BaseAttachmentMessageHandler
+	internal sealed class ReplayFileAttachmentMessageHandler : BaseAttachmentMessageHandler
 	{
 		protected override string FileExtension => ".orarep";
-
-		private readonly AttachmentReplayMetadataTransformer _metadataTransformer;
-		private readonly ReplayMetadataToEmbedTransformer _toEmbedTransformer;
-
-		public ReplayFileAttachmentMessageHandler(AttachmentReplayMetadataTransformer metadataTransformer, ReplayMetadataToEmbedTransformer toEmbedTransformer)
+		private readonly AttachmentReplayMetadataTransformer _metadata;
+		private readonly ReplayMetadataToEmbedTransformer _renderer;
+		public ReplayFileAttachmentMessageHandler(AttachmentReplayMetadataTransformer metadata, ReplayMetadataToEmbedTransformer renderer)
 		{
-			_metadataTransformer = metadataTransformer;
-			_toEmbedTransformer = toEmbedTransformer;
+			_metadata = metadata;
+			_renderer = renderer;
 		}
 
-		public override async Task InvokeAsync(SocketUserMessage message)
+		public override async Task InvokeAsync(IUserMessage message, CancellationToken cancellationToken = default)
 		{
-			var attachment = message.Attachments.First(x => x.Filename.EndsWith(FileExtension));
-
-			var replayMetadata = _metadataTransformer.GetMetadata(attachment);
-			replayMetadata.FileName = attachment.Filename;
-			var embed = await _toEmbedTransformer.CreateEmbed(replayMetadata, attachment.Url);
-			if (embed != null)
-			{
-				var replyMessage = $"{message.Author.Mention} posted a replay";
-				if (string.IsNullOrWhiteSpace(message.Content))
-				{
-					replyMessage += ":";
-				}
-				else
-				{
-					replyMessage += $" with commentary:\n{message.Content}";
-				}
-
-				await message.Channel.SendMessageAsync(replyMessage, embed: embed);
-			}
+			using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			deadline.CancelAfter(AttachmentDownloader.OperationTimeout);
+			var attachment = message.Attachments.First(item => item.Filename?.EndsWith(FileExtension, StringComparison.Ordinal) == true);
+			var metadata = await _metadata.GetMetadataAsync(attachment, deadline.Token);
+			var embed = await _renderer.CreateEmbed(metadata, attachment.Url, deadline.Token);
+			var text = $"{message.Author.Mention} posted a replay";
+			text += string.IsNullOrWhiteSpace(message.Content) ? ":" : $" with commentary:\n{message.Content}";
+			if (text.Length > 2000)
+				text = text[..1997] + "...";
+			await message.Channel.SendMessageAsync(text, embed: embed,
+				allowedMentions: new AllowedMentions { AllowedTypes = AllowedMentionTypes.None, UserIds = new List<ulong> { message.Author.Id } },
+				options: new RequestOptions { CancelToken = deadline.Token });
 		}
 	}
 }
