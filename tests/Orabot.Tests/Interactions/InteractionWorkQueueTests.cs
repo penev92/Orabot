@@ -1,3 +1,4 @@
+using Orabot.Bot.Discord.BackgroundWork;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orabot.Bot.Discord.Interactions;
 using Orabot.Bot.Infrastructure.BackgroundWork;
@@ -5,13 +6,13 @@ using Orabot.Bot.Infrastructure.BackgroundWork;
 namespace Orabot.Tests.Interactions;
 
 /// <summary>Checks bounded admission, concurrency, cancellation and fault isolation without a Gateway or timer sleeps.</summary>
-public sealed class InteractionWorkQueueTests
+public sealed class BotWorkQueueTests
 {
 	[Fact]
 	public async Task Rejects_work_when_the_bounded_queue_is_full()
 	{
 		var failure = new WorkerFailureState();
-		using var queue = new InteractionWorkQueue(NullLogger<InteractionWorkQueue>.Instance, failure, capacity: 1, workerCount: 1);
+		using var queue = new BotWorkQueue(NullLogger<BotWorkQueue>.Instance, failure, capacity: 1, workerCount: 1);
 		var executed = Signal();
 		Assert.True(queue.TryEnqueue(_ => { executed.TrySetResult(); return Task.CompletedTask; }));
 		Assert.False(queue.TryEnqueue(_ => throw new InvalidOperationException("Rejected work must never execute.")));
@@ -24,7 +25,7 @@ public sealed class InteractionWorkQueueTests
 	[Fact]
 	public async Task Executes_only_the_configured_number_of_jobs_concurrently()
 	{
-		using var queue = new InteractionWorkQueue(NullLogger<InteractionWorkQueue>.Instance, new WorkerFailureState(), capacity: 4, workerCount: 2);
+		using var queue = new BotWorkQueue(NullLogger<BotWorkQueue>.Instance, new WorkerFailureState(), capacity: 4, workerCount: 2);
 		var bothStarted = Signal();
 		var release = Signal();
 		var allCompleted = Signal();
@@ -57,7 +58,7 @@ public sealed class InteractionWorkQueueTests
 	public async Task Stop_cancels_active_work_and_drains_admitted_work_with_cancellation()
 	{
 		var failure = new WorkerFailureState();
-		using var queue = new InteractionWorkQueue(NullLogger<InteractionWorkQueue>.Instance, failure, capacity: 2, workerCount: 1);
+		using var queue = new BotWorkQueue(NullLogger<BotWorkQueue>.Instance, failure, capacity: 2, workerCount: 1);
 		var started = Signal();
 		var drained = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 		Assert.True(queue.TryEnqueue(async token =>
@@ -78,7 +79,7 @@ public sealed class InteractionWorkQueueTests
 	public async Task One_failed_job_does_not_stop_following_jobs()
 	{
 		var failure = new WorkerFailureState();
-		using var queue = new InteractionWorkQueue(NullLogger<InteractionWorkQueue>.Instance, failure, capacity: 2, workerCount: 1);
+		using var queue = new BotWorkQueue(NullLogger<BotWorkQueue>.Instance, failure, capacity: 2, workerCount: 1);
 		var completed = Signal();
 		Assert.True(queue.TryEnqueue(_ => throw new InvalidOperationException("synthetic-private-payload")));
 		Assert.True(queue.TryEnqueue(_ => { completed.TrySetResult(); return Task.CompletedTask; }));

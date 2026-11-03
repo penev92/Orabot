@@ -1,3 +1,4 @@
+using Orabot.Bot.Discord.BackgroundWork;
 using System.Collections.Concurrent;
 using Discord;
 using Discord.Interactions;
@@ -319,7 +320,7 @@ public sealed class InteractionDispatcherTests
 		readonly InteractionDispatcher dispatcher;
 		public ConcurrentQueue<RecordedLog> Logs { get; } = new();
 		public DispatcherProbeState State { get; } = new();
-		public InteractionWorkQueue Queue { get; }
+		public BotWorkQueue Queue { get; }
 		public DocumentationCatalog Catalog => services.GetRequiredService<DocumentationCatalog>();
 
 		Fixture(int capacity, TimeProvider clock)
@@ -331,7 +332,7 @@ public sealed class InteractionDispatcherTests
 				.AddSingleton<ILogger<DocumentationAutocompleteResponder>>(new RecordingLogger<DocumentationAutocompleteResponder>(Logs))
 				.AddInteractionFramework(client.Rest)
 				.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
-			Queue = new InteractionWorkQueue(new RecordingLogger<InteractionWorkQueue>(Logs), new WorkerFailureState(), capacity, workerCount: 1);
+			Queue = new BotWorkQueue(new RecordingLogger<BotWorkQueue>(Logs), new WorkerFailureState(), capacity, workerCount: 1);
 			dispatcher = new InteractionDispatcher(client, services.GetRequiredService<InteractionService>(), Queue, services, clock,
 				new RecordingLogger<InteractionDispatcher>(Logs));
 		}

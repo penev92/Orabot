@@ -1,3 +1,4 @@
+using Orabot.Bot.Discord.BackgroundWork;
 using System;
 using System.Globalization;
 using System.Text.Json;
@@ -51,7 +52,7 @@ namespace Orabot.Bot.DependencyInjection
 				}))
 				.AddSingleton<CommandService>()
 				.AddInteractionFramework(provider => provider.GetRequiredService<DiscordSocketClient>().Rest)
-				.AddSingleton<InteractionWorkQueue>()
+				.AddSingleton<BotWorkQueue>()
 				.AddSingleton<IInteractionDispatcher, InteractionDispatcher>()
 				.AddSingleton<BaseTypeReader, UriTypeReader>()
 				.AddSingleton<BaseTypeReader, DiscordMessageIdentifierTypeReader>()
@@ -77,7 +78,7 @@ namespace Orabot.Bot.DependencyInjection
 				.AddSingleton<DiscordReadiness>()
 				// Reverse stop order lets polling workers finish before the connection is closed.
 				.AddHostedService<global::Orabot.Bot.Discord.Bot>()
-				.AddHostedService(provider => provider.GetRequiredService<InteractionWorkQueue>())
+				.AddHostedService(provider => provider.GetRequiredService<BotWorkQueue>())
 				.AddLongRunningServices();
 		}
 
