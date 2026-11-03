@@ -1,240 +1,87 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Discord;
-using Discord.Commands;
-using Discord.WebSocket;
-using Microsoft.Extensions.Configuration;
+using Discord.Interactions;
+using Microsoft.Extensions.Hosting;
 
 namespace Orabot.Bot.Features.Quotes
 {
-	public class QuoteModule : ModuleBase<SocketCommandContext>
+	/// <summary>Provides structured same-server message/range quotes and trusted custom quotations.</summary>
+	[Group("quote", "Quotes source messages or trusted custom text.")]
+	[IntegrationType(ApplicationIntegrationType.GuildInstall)]
+	[CommandContextType(InteractionContextType.Guild)]
+	public sealed class QuoteModule : InteractionModuleBase<IInteractionContext>
 	{
-		private readonly QuotingService _quotingService;
-		private readonly string[] _trustedRoles;
+		private readonly QuotingService _quotes;
+		private readonly IHostApplicationLifetime _lifetime;
 
-		public QuoteModule(QuotingService quotingService, IConfiguration configuration)
+		/// <summary>Receives quote behavior and host cancellation; construction performs no requests.</summary>
+		public QuoteModule(QuotingService quotes, IHostApplicationLifetime lifetime) { _quotes = quotes; _lifetime = lifetime; }
+
+		/// <summary>Quotes one message or a same-author range identified by strings rather than lossy numeric options.</summary>
+		[SlashCommand("message", "Quotes a message or same-author range from this server.")]
+		public Task MessageAsync(
+			[Summary("message", "Message ID, channel-ID-message-ID pair or Discord message link.")] string message,
+			[Summary("end", "Optional final message identifier for a same-author range.")] string end = null,
+			[Summary("channel", "Source channel; bare IDs otherwise search accessible server channels.")] ITextChannel channel = null)
+			=> QuoteResponse.CompleteAsync(Context, _quotes.CreateMessageQuoteAsync(Context.Guild, Context.User,
+				message, end, channel, Context.Channel as ITextChannel, _lifetime.ApplicationStopping), _lifetime.ApplicationStopping);
+
+		/// <summary>Preserves free-form author/timestamp input under the existing trusted-role policy.</summary>
+		[SlashCommand("custom", "Quotes custom text. Requires a configured trusted role.")]
+		public Task CustomAsync(
+			[Summary("text", "The text to quote."), MaxLength(4096)] string text,
+			[Summary("author", "Optional displayed author name."), MaxLength(256)] string author = null,
+			[Summary("channel", "Optional source channel in this server.")] ITextChannel channel = null,
+			[Summary("timestamp", "Optional displayed timestamp, kept as free-form text."), MaxLength(256)] string timestamp = null)
+			=> QuoteResponse.CompleteAsync(Context, _quotes.CreateCustomQuoteAsync(Context.Guild, Context.User,
+				text, author, channel, timestamp, _lifetime.ApplicationStopping), _lifetime.ApplicationStopping);
+	}
+
+	/// <summary>Quotes a selected message through the same source authorization and rendering path.</summary>
+	[IntegrationType(ApplicationIntegrationType.GuildInstall)]
+	[CommandContextType(InteractionContextType.Guild)]
+	public sealed class QuoteMessageContextModule : InteractionModuleBase<IInteractionContext>
+	{
+		private readonly QuotingService _quotes;
+		private readonly IHostApplicationLifetime _lifetime;
+
+		/// <summary>Uses the same concrete feature services as the slash command group.</summary>
+		public QuoteMessageContextModule(QuotingService quotes, IHostApplicationLifetime lifetime) { _quotes = quotes; _lifetime = lifetime; }
+
+		/// <summary>Re-fetches the selected message only after checking requester and bot access to its source.</summary>
+		[MessageCommand("Quote message")]
+		public Task QuoteAsync(IMessage message) => QuoteResponse.CompleteAsync(Context,
+			_quotes.CreateMessageQuoteAsync(Context.Guild, Context.User, $"{message.Channel.Id}-{message.Id}",
+				cancellationToken: _lifetime.ApplicationStopping), _lifetime.ApplicationStopping);
+	}
+
+	internal static class QuoteResponse
+	{
+		internal static async Task CompleteAsync(IInteractionContext context, Task<Embed> quote, CancellationToken cancellationToken)
 		{
-			_quotingService = quotingService;
-			_trustedRoles = configuration["TrustedRoles"].Split(';').Select(x => x.Trim()).ToArray();
-		}
-
-		[Command("quote")]
-		[Summary("Quotes an arbitrary message with optional author, source channel and timestamp. Limited usage for some roles only.")]
-		[Remarks("Usage: `quote [#channel_name]\n[author][time]\n<text to quote>`")]
-		public async Task Quote([Remainder]string message)
-		{
-			var userRoles = (Context.User as SocketGuildUser)?.Roles;
-			if (userRoles == null || !userRoles.Select(x => x.Name).Intersect(_trustedRoles).Any())
-			{
-				await ReplyAsync("No rights!");
-				return;
-			}
-
-			HandleQuote(Context.Guild, message);
-		}
-
-		[Command("quote")]
-		[Summary("Quotes a single message specified by Message ID.")]
-		[Remarks("Usage: `quote <messageId>`")]
-		public async Task Quote(ulong messageId)
-		{
-			if (!_quotingService.TryGetMessage(Context.Guild, Context.Client.CurrentUser, messageId, out var message, Context.Channel as SocketTextChannel))
-			{
-				await ReplyAsync("No such message found in this server.");
-				return;
-			}
-
-			HandleQuote(message);
-		}
-
-		[Command("quote")]
-		[Summary("Quotes a group of messages specified by Message ID of the first and last messages. " +
-				 "Only takes messages that belong to the author of the first one.")]
-		[Remarks("Usage: `quote <firstMessageId> <lastMessageId>`")]
-		public async Task Quote(ulong firstMessageId, ulong lastMessageId)
-		{
-			if (!_quotingService.TryGetMessage(Context.Guild, Context.Client.CurrentUser, firstMessageId, out var message, Context.Channel as SocketTextChannel))
-			{
-				await ReplyAsync("No such message found in this server.");
-				return;
-			}
-
-			var messages = await _quotingService.GetMessageList(message.Channel as SocketTextChannel, firstMessageId, lastMessageId);
-			if (!messages.Any())
-			{
-				await ReplyAsync("No such messages found in the target channel.");
-				return;
-			}
-
-			HandleQuote(messages);
-		}
-
-		[Command("quote")]
-		[Summary("Quotes a single message specified by Channel ID and Message ID.")]
-		[Remarks("Usage: `quote <message_identifier>`")]
-		public async Task Quote(DiscordMessageIdentifier messageIdentifier)
-		{
-			if (!_quotingService.TryGetChannel(Context.Guild, messageIdentifier.ChannelId, out var channel))
-			{
-				return;
-			}
-
-			var message = await channel.GetMessageAsync(messageIdentifier.MessageId);
-			if (message == null)
-			{
-				await ReplyAsync("No such message found in the specified channel.");
-				return;
-			}
-
-			HandleQuote(message);
-		}
-
-		[Command("quote")]
-		[Summary("Quotes a single message specified by Channel ID and Message ID.")]
-		[Remarks("Usage: `quote <firstMessageIdentifier> <lastMessageIdentifier>`")]
-		public async Task Quote(DiscordMessageIdentifier firstMessageIdentifier, DiscordMessageIdentifier lastMessageIdentifier)
-		{
-			if (!_quotingService.TryGetChannel(Context.Guild, firstMessageIdentifier.ChannelId, out var channel))
-			{
-				return;
-			}
-
-			var messages = await _quotingService.GetMessageList(channel, firstMessageIdentifier.MessageId, lastMessageIdentifier.MessageId);
-			if (!messages.Any())
-			{
-				await ReplyAsync("No such messages found in the specified channel.");
-				return;
-			}
-
-			HandleQuote(messages);
-		}
-
-		[Command("quote")]
-		[Summary("Quotes a single message specified by Message ID.")]
-		[Remarks("Usage: `quote <#channel_name> <messageId>`")]
-		public async Task Quote(string channelMention, ulong messageId)
-		{
-			if (!_quotingService.TryGetChannel(Context.Guild, channelMention, out var channel))
-			{
-				await ReplyAsync("Unknown channel specified.");
-				return;
-			}
-
-			var message = await channel.GetMessageAsync(messageId);
-			HandleQuote(message);
-		}
-
-		[Command("quote")]
-		[Summary("Quotes a group of messages specified by Message ID of the first and last messages. " +
-				 "Only takes messages that belong to the author of the first one.")]
-		[Remarks("Usage: `quote <#channel_name> <firstMessageId> <lastMessageId>`")]
-		public async Task Quote(string channelMention, ulong firstMessageId, ulong lastMessageId)
-		{
-			if (!_quotingService.TryGetChannel(Context.Guild, channelMention, out var channel))
-			{
-				await ReplyAsync("Unknown channel specified.");
-				return;
-			}
-
-			var messages = await _quotingService.GetMessageList(channel, firstMessageId, lastMessageId);
-			HandleQuote(messages);
-		}
-
-		[Command("quote")]
-		[Summary("Quotes a single message specified by Message URI.")]
-		[Remarks("Usage: `quote <messageUri>`")]
-		public async Task Quote(Uri messageUri)
-		{
-			var parts = messageUri.AbsolutePath.Split('/').Reverse().ToArray();
-
-			if (!ulong.TryParse(parts[0], out var messageId) ||
-				!ulong.TryParse(parts[1], out var channelId) ||
-				!ulong.TryParse(parts[2], out var guildId))
-			{
-				return;
-			}
-
-			if (!_quotingService.TryGetGuild(Context.Client, guildId, out var guild) || !_quotingService.TryGetChannel(guild, channelId, out var channel))
-			{
-				return;
-			}
-
-			var message = await channel.GetMessageAsync(messageId);
-			HandleQuote(message);
-		}
-
-		[Command("quote")]
-		[Summary("Quotes a group of messages specified by Message URI of the first and last messages. " +
-				 "Only takes messages that belong to the author of the first one.")]
-		[Remarks("Usage: `quote <firstMessageUri> <lastMessageUri>`")]
-		public async Task Quote(Uri firstMessageUri, Uri lastMessageUri)
-		{
-			var parts = firstMessageUri.AbsolutePath.Split('/').Reverse().ToArray();
-
-			if (!ulong.TryParse(parts[0], out var firstMessageId) ||
-				!ulong.TryParse(parts[1], out var channelId) ||
-				!ulong.TryParse(parts[2], out var guildId))
-			{
-				return;
-			}
-
-			if (!_quotingService.TryGetGuild(Context.Client, guildId, out var guild) || !_quotingService.TryGetChannel(guild, channelId, out var channel))
-			{
-				return;
-			}
-
-			var lastMessageIdentifier = lastMessageUri.AbsolutePath.Split('/').Last();
-			if (!ulong.TryParse(lastMessageIdentifier, out var lastMessageId))
-			{
-				return;
-			}
-
-			var messages = await _quotingService.GetMessageList(channel, firstMessageId, lastMessageId);
-			HandleQuote(messages);
-		}
-
-		#region Private methods
-
-		private async void HandleQuote(SocketGuild guild, string message)
-		{
-			var embed = _quotingService.CreateEmbed(guild, message);
-			TryDeleteQuoteCommand();
-			await SendQuote(Context.User, embed);
-		}
-
-		private async void HandleQuote(IMessage message)
-		{
-			var embed = _quotingService.CreateEmbed(message);
-			TryDeleteQuoteCommand();
-			await SendQuote(Context.User, embed);
-		}
-
-		private async void HandleQuote(IList<IMessage> messages)
-		{
-			var embed = _quotingService.CreateEmbed(messages);
-			TryDeleteQuoteCommand();
-			await SendQuote(Context.User, embed);
-		}
-
-		private async Task SendQuote(IUser user, Embed embed)
-		{
-			await ReplyAsync($"{user.Username}:", false, embed);
-		}
-
-		private async void TryDeleteQuoteCommand()
-		{
+			Embed embed = null;
+			string content;
 			try
 			{
-				await Context.Channel.DeleteMessageAsync(Context.Message, new RequestOptions
-				{
-					AuditLogReason = "Quote command!"
-				});
+				embed = await quote;
+				content = context.User.Username + ":";
 			}
-			catch (Exception) { }
+			catch (ArgumentException)
+			{
+				content = "Check the quote options. Messages and channels must belong to this server; custom text allows 4096 characters and author/timestamp allow 256 each.";
+			}
+			catch (UnauthorizedAccessException)
+			{
+				content = "You and Orabot must be able to view the source channel and read its history. Custom quotes also require a configured trusted role.";
+			}
+			await context.Interaction.ModifyOriginalResponseAsync(properties =>
+			{
+				properties.Content = content;
+				properties.Embeds = embed == null ? Array.Empty<Embed>() : new[] { embed };
+				properties.AllowedMentions = AllowedMentions.None;
+			}, new RequestOptions { CancelToken = cancellationToken });
 		}
-
-		#endregion
 	}
 }

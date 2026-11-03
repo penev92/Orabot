@@ -7,7 +7,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Discord;
-using Discord.Commands;
 using Discord.WebSocket;
 using Orabot.Bot.Discord;
 using Orabot.Bot.Features.Quotes;
@@ -16,7 +15,6 @@ using RestSharp;
 using RestSharp.Serializers.Json;
 using System.Net.Http;
 using System.Threading;
-using Orabot.Bot.Discord.Commands;
 using Orabot.Bot.Discord.Interactions;
 using Orabot.Bot.Discord.Logging;
 using Orabot.Bot.Discord.Messages;
@@ -50,16 +48,11 @@ namespace Orabot.Bot.DependencyInjection
 						GatewayIntents.DirectMessageReactions | GatewayIntents.MessageContent,
 					MessageCacheSize = provider.GetRequiredService<IOptions<DiscordBotOptions>>().Value.MessageCacheSize
 				}))
-				.AddSingleton<CommandService>()
 				.AddInteractionFramework(provider => provider.GetRequiredService<DiscordSocketClient>().Rest)
 				.AddSingleton<BotWorkQueue>()
 				.AddSingleton<IInteractionDispatcher, InteractionDispatcher>()
-				.AddSingleton<BaseTypeReader, UriTypeReader>()
-				.AddSingleton<BaseTypeReader, DiscordMessageIdentifierTypeReader>()
 				.AddDefaultEventHandlerServices()
 				.AddDefaultCustomMessageHandlers()
-				.AddSingleton<ModuleBase<SocketCommandContext>, QuoteModule>()
-				.AddSingleton<QuotingService>()
 				.AddDefaultTransformers()
 				.AddSingleton<IRestClient>(_ =>
 				{
@@ -114,7 +107,7 @@ namespace Orabot.Bot.DependencyInjection
 			services.AddOptions<TrustedRoleOptions>().Bind(configuration);
 			services.AddSingleton<IValidateOptions<RolesOptions>, RolesOptionsValidator>();
 			services.AddOptions<RolesOptions>().Bind(configuration).ValidateOnStart();
-			return services.AddSingleton<RoleAssignmentService>().AddDocumentationFeature(configuration);
+			return services.AddSingleton<RoleAssignmentService>().AddSingleton<QuotingService>().AddDocumentationFeature(configuration);
 		}
 
 		public static IServiceCollection AddDefaultEventHandlerServices(this IServiceCollection serviceCollection)
@@ -138,7 +131,6 @@ namespace Orabot.Bot.DependencyInjection
 				.AddSingleton<ICustomMessageHandler, OpenRaResourceCenterMapLinkMessageHandler>()
 				.AddSingleton<ICustomMessageHandler, LogFileAttachmentMessageHandler>()
 				.AddSingleton<ICustomMessageHandler, ReplayFileAttachmentMessageHandler>()
-				.AddSingleton<ICustomMessageHandler, BaseCommandMessageHandler>()
 				.AddSingleton<ICustomMessageHandler, BaseModTimerMessageHandler>()
 				.AddSingleton<ICustomMessageHandler, StackTraceMessageHandler>();
 		}

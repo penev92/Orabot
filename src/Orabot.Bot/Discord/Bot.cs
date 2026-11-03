@@ -1,14 +1,10 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Discord.Commands;
 using Discord.WebSocket;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Orabot.Bot.Discord.Commands;
 using Orabot.Bot.Discord.Interactions;
 using Orabot.Bot.Discord.Logging;
 using Orabot.Bot.Discord.Messages;
@@ -19,10 +15,6 @@ namespace Orabot.Bot.Discord
 	public sealed class Bot : IHostedService
 	{
 		private readonly DiscordSocketClient _client;
-		private readonly CommandService _commands;
-		private readonly IServiceProvider _moduleServices;
-		private readonly IReadOnlyList<BaseTypeReader> _typeReaders;
-		private readonly IReadOnlyList<ModuleBase<SocketCommandContext>> _modules;
 		private readonly ILogEventHandler _logEventHandler;
 		private readonly IMessageEventHandler _messageEventHandler;
 		private readonly IReactionEventHandler _reactionEventHandler;
@@ -39,10 +31,6 @@ namespace Orabot.Bot.Discord
 
 		public Bot(
 			DiscordSocketClient client,
-			CommandService commands,
-			IServiceProvider moduleServices,
-			IEnumerable<BaseTypeReader> typeReaders,
-			IEnumerable<ModuleBase<SocketCommandContext>> modules,
 			ILogEventHandler logEventHandler,
 			IMessageEventHandler messageEventHandler,
 			IReactionEventHandler reactionEventHandler,
@@ -50,7 +38,7 @@ namespace Orabot.Bot.Discord
 			DiscordReadiness readiness,
 			IOptions<DiscordBotOptions> options,
 			ILogger<Bot> logger)
-			: this(client, commands, moduleServices, typeReaders, modules, logEventHandler,
+			: this(client, logEventHandler,
 				messageEventHandler, reactionEventHandler, interactionDispatcher,
 				readiness, options, logger, new DiscordConnectionLifecycle(client))
 		{
@@ -58,10 +46,6 @@ namespace Orabot.Bot.Discord
 
 		internal Bot(
 			DiscordSocketClient client,
-			CommandService commands,
-			IServiceProvider moduleServices,
-			IEnumerable<BaseTypeReader> typeReaders,
-			IEnumerable<ModuleBase<SocketCommandContext>> modules,
 			ILogEventHandler logEventHandler,
 			IMessageEventHandler messageEventHandler,
 			IReactionEventHandler reactionEventHandler,
@@ -72,10 +56,6 @@ namespace Orabot.Bot.Discord
 			IDiscordConnectionLifecycle connection)
 		{
 			_client = client;
-			_commands = commands;
-			_moduleServices = moduleServices;
-			_typeReaders = typeReaders.ToArray();
-			_modules = modules.ToArray();
 			_logEventHandler = logEventHandler;
 			_messageEventHandler = messageEventHandler;
 			_reactionEventHandler = reactionEventHandler;
@@ -96,16 +76,6 @@ namespace Orabot.Bot.Discord
 			AttachEventHandlers();
 			try
 			{
-				foreach (var typeReader in _typeReaders)
-					_commands.AddTypeReader(typeReader.SupportedType, typeReader);
-
-				foreach (var module in _modules)
-				{
-					cancellationToken.ThrowIfCancellationRequested();
-					// Discord.Net needs a provider to activate command modules; other dependencies are explicit.
-					await _commands.AddModuleAsync(module.GetType(), _moduleServices);
-				}
-
 				await _interactionDispatcher.InitializeAsync(cancellationToken);
 				cancellationToken.ThrowIfCancellationRequested();
 				_shutdownRequired = true;
@@ -181,7 +151,6 @@ namespace Orabot.Bot.Discord
 		private void AttachEventHandlers()
 		{
 			_client.Log += _logEventHandler.Log;
-			_commands.Log += _logEventHandler.Log;
 			_client.ReactionAdded += _reactionEventHandler.HandleReactionAddedAsync;
 			_client.ReactionRemoved += _reactionEventHandler.HandleReactionRemovedAsync;
 			_client.MessageReceived += _messageEventHandler.HandleMessageReceivedAsync;
@@ -194,7 +163,6 @@ namespace Orabot.Bot.Discord
 		private void DetachEventHandlers()
 		{
 			_client.Log -= _logEventHandler.Log;
-			_commands.Log -= _logEventHandler.Log;
 			_client.ReactionAdded -= _reactionEventHandler.HandleReactionAddedAsync;
 			_client.ReactionRemoved -= _reactionEventHandler.HandleReactionRemovedAsync;
 			_client.MessageReceived -= _messageEventHandler.HandleMessageReceivedAsync;

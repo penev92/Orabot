@@ -20,6 +20,7 @@ public sealed class ApplicationCommandSchemaTests
 		using var client = new DiscordSocketClient();
 		using var lifetime = new OfflineHostApplicationLifetime();
 		var settings = DocumentationOptionsTests.ValidSettings();
+		settings["TrustedRoles"] = "";
 		settings["FreelyAssignedRoles"] = "";
 		settings["FreelyAssignedRolesByEmote"] = "";
 		settings["RoleAssignmentMessageId"] = "0";
@@ -31,11 +32,14 @@ public sealed class ApplicationCommandSchemaTests
 		await framework.AddModulesAsync(typeof(OpenRaInformationModule).Assembly, services);
 		var commands = framework.SlashCommands.ToDictionary(command => command.Name);
 
-		Assert.Equal(14, commands.Count);
-		Assert.Contains("role", commands.Keys);
+		Assert.Equal(16, commands.Count);
 		Assert.Contains("help", commands.Keys);
 		Assert.Contains("hi", commands.Keys);
 		Assert.Contains("say", commands.Keys);
+		Assert.Contains("role", commands.Keys);
+		Assert.Equal("quote", commands["message"].Module.SlashGroupName);
+		Assert.Equal("quote", commands["custom"].Module.SlashGroupName);
+		Assert.Equal("Quote message", Assert.Single(framework.ContextCommands).Name);
 		Assert.Equal(4, framework.Modules.SelectMany(module => module.AutocompleteCommands).Count());
 		foreach (var name in Descriptions.Keys)
 		{
