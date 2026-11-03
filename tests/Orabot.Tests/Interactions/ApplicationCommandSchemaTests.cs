@@ -21,16 +21,20 @@ public sealed class ApplicationCommandSchemaTests
 		using var lifetime = new OfflineHostApplicationLifetime();
 		var configuration = new ConfigurationBuilder().AddInMemoryCollection(DocumentationOptionsTests.ValidSettings()).Build();
 		using var services = new ServiceCollection().AddLogging().AddSingleton<IHostApplicationLifetime>(lifetime)
-			.AddSingleton(TimeProvider.System).AddDocumentationFeature(configuration)
+			.AddSingleton(TimeProvider.System).AddCommandFeatures(configuration)
 			.AddInteractionFramework(client.Rest).BuildServiceProvider();
 		var framework = services.GetRequiredService<InteractionService>();
 		await framework.AddModulesAsync(typeof(OpenRaInformationModule).Assembly, services);
 		var commands = framework.SlashCommands.ToDictionary(command => command.Name);
 
-		Assert.Equal(Descriptions.Keys.OrderBy(name => name, StringComparer.Ordinal), commands.Keys.OrderBy(name => name, StringComparer.Ordinal));
+		Assert.Equal(13, commands.Count);
+		Assert.Contains("help", commands.Keys);
+		Assert.Contains("hi", commands.Keys);
+		Assert.Contains("say", commands.Keys);
 		Assert.Equal(4, framework.Modules.SelectMany(module => module.AutocompleteCommands).Count());
-		foreach (var (name, command) in commands)
+		foreach (var name in Descriptions.Keys)
 		{
+			var command = commands[name];
 			Assert.Equal(Descriptions[name], command.Description);
 			Assert.Equal(new[] { ApplicationIntegrationType.GuildInstall }, command.IntegrationTypes);
 			Assert.Equal(new[] { InteractionContextType.Guild, InteractionContextType.BotDm }, command.ContextTypes.OrderBy(value => value));

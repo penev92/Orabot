@@ -58,7 +58,6 @@ namespace Orabot.Bot.DependencyInjection
 				.AddSingleton<BaseTypeReader, DiscordMessageIdentifierTypeReader>()
 				.AddDefaultEventHandlerServices()
 				.AddDefaultCustomMessageHandlers()
-				.AddSingleton<ModuleBase<SocketCommandContext>, GeneralModule>()
 				.AddSingleton<ModuleBase<SocketCommandContext>, QuoteModule>()
 				.AddSingleton<ModuleBase<SocketCommandContext>, RoleManagementModule>()
 				.AddSingleton<QuotingService>()
@@ -70,7 +69,7 @@ namespace Orabot.Bot.DependencyInjection
 					return new RestClient(new RestClientOptions(),
 						configureSerialization: s => s.UseSystemTextJson(serializationOptions));
 				})
-				.AddDocumentationFeature(configuration)
+				.AddCommandFeatures(configuration)
 				.AddResourceCenterIntegration()
 				.AddYamlDeserializer()
 				.AddSingleton(TimeProvider.System)
@@ -108,6 +107,13 @@ namespace Orabot.Bot.DependencyInjection
 			services.AddSingleton<IValidateOptions<LegacyFeatureOptions>, LegacyFeatureOptionsValidator>();
 			services.AddOptions<LegacyFeatureOptions>().Bind(configuration).ValidateOnStart();
 			return services;
+		}
+
+		/// <summary>Registers concrete command services for normal startup and explicit SDK registration.</summary>
+		public static IServiceCollection AddCommandFeatures(this IServiceCollection services, IConfiguration configuration)
+		{
+			services.AddOptions<TrustedRoleOptions>().Bind(configuration);
+			return services.AddDocumentationFeature(configuration);
 		}
 
 		public static IServiceCollection AddDefaultEventHandlerServices(this IServiceCollection serviceCollection)

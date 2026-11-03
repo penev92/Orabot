@@ -58,7 +58,7 @@ namespace Orabot.Hosts.ConsoleHost
 				return 2;
 			}
 			using var client = new DiscordRestClient();
-			builder.Services.AddInteractionFramework(client).AddDocumentationFeature(builder.Configuration)
+			builder.Services.AddInteractionFramework(client).AddCommandFeatures(builder.Configuration)
 				.AddSingleton(TimeProvider.System);
 			using var host = builder.Build();
 			OrabotConfiguration.Validate(host.Services);

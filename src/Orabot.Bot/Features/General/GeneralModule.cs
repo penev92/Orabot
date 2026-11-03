@@ -1,66 +1,74 @@
-﻿using System.Collections.Generic;
+using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
-using Discord.Commands;
-using Discord.WebSocket;
-using Microsoft.Extensions.Configuration;
-using Orabot.Bot.Features.Quotes;
+using Discord;
+using Discord.Interactions;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Orabot.Bot.Features.General
 {
-	public class GeneralModule : ModuleBase<SocketCommandContext>
+	/// <summary>Provides slash-command help, greetings and role-authorized speaking.</summary>
+	[IntegrationType(ApplicationIntegrationType.GuildInstall)]
+	[CommandContextType(InteractionContextType.Guild, InteractionContextType.BotDm)]
+	public sealed class GeneralModule : InteractionModuleBase<IInteractionContext>
 	{
-		private readonly string[] _trustedRoles;
-		private readonly CommandService _commands;
+		readonly InteractionService commands;
+		readonly TrustedRoleOptions trusted;
+		readonly IHostApplicationLifetime lifetime;
 
-		public GeneralModule(IConfiguration configuration, CommandService commands)
+		public GeneralModule(InteractionService commands, IOptions<TrustedRoleOptions> trusted, IHostApplicationLifetime lifetime)
 		{
-			_commands = commands;
-			_trustedRoles = configuration["TrustedRoles"].Split(';').Select(x => x.Trim()).ToArray();
+			this.commands = commands;
+			this.trusted = trusted.Value;
+			this.lifetime = lifetime;
 		}
 
-		[Command("help", true)]
-		[Summary("Lists all available commands.")]
-		public async Task Help()
+		[SlashCommand("help", "Lists all available commands.")]
+		public async Task HelpAsync()
 		{
-			foreach (var block in GenerateHelpBlocks())
+			var lines = commands.SlashCommands.Select(command =>
 			{
-				await ReplyAsync(block);
-			}
-		}
-
-		[Command("hi")]
-		[Summary("Says hi.")]
-		public async Task Hi()
-		{
-			await ReplyAsync($"Hi, {Context.User.Mention} !");
-		}
-
-		[Command("say")]
-		[Summary("Repeats what you say.")]
-		public async Task Say([Remainder]string message)
-		{
-			var userRoles = (Context.User as SocketGuildUser)?.Roles;
-			if (userRoles != null && userRoles.Select(x => x.Name).Intersect(_trustedRoles).Any())
+				var name = command.Module.IsSlashGroup ? command.Module.SlashGroupName + " " + command.Name : command.Name;
+				return "/" + name + " — " + command.Description;
+			}).Concat(commands.ContextCommands.Select(command => "Message action: " + command.Name)).OrderBy(line => line, StringComparer.Ordinal);
+			var blocks = new List<string>();
+			var block = new StringBuilder();
+			foreach (var line in lines)
 			{
-				await ReplyAsync(message);
+				if (block.Length + line.Length + 1 > 1900)
+				{
+					blocks.Add(block.ToString());
+					block.Clear();
+				}
+				block.AppendLine(line);
 			}
-			else
-			{
-				await ReplyAsync("No rights!");
-			}
+			if (block.Length > 0) blocks.Add(block.ToString());
+			if (blocks.Count == 0) blocks.Add("No commands are available.");
+			await CompleteAsync(blocks[0]);
+			foreach (var next in blocks.Skip(1))
+				await Context.Interaction.FollowupAsync(next, allowedMentions: AllowedMentions.None,
+					options: new RequestOptions { CancelToken = lifetime.ApplicationStopping });
 		}
 
-		#region Private methods
+		[SlashCommand("hi", "Says hi.")]
+		public Task HiAsync() => CompleteAsync($"Hi, {Context.User.Mention} !");
 
-		private IEnumerable<string> GenerateHelpBlocks()
+		[SlashCommand("say", "Repeats what you say.")]
+		[CommandContextType(InteractionContextType.Guild)]
+		public Task SayAsync([Summary("message", "The text to repeat."), MaxLength(2000)] string message)
 		{
-			// This is set up to use a more streamlined look than previous versions and takes inspiration from the Markdown example at
-			// https://gist.github.com/Almeeida/41a664d8d5f3a8855591c2f1e0e07b19
-			yield return $"```md\n{string.Join("\n", _commands.Commands.Where(x => x.Module.Name != nameof(QuoteModule)).Select(x => x.CustomToString()))}\n```";
-			yield return $"```md\n{string.Join("\n", _commands.Commands.Where(x => x.Module.Name == nameof(QuoteModule)).Select(x => x.CustomToString()))}\n```";
+			if (!trusted.IsTrusted(Context.User as IGuildUser, Context.Guild))
+				return CompleteAsync("No rights!");
+			return CompleteAsync(string.IsNullOrEmpty(message) || message.Length > 2000 ? "Enter between 1 and 2000 characters." : message);
 		}
 
-		#endregion
+		Task CompleteAsync(string content) => Context.Interaction.ModifyOriginalResponseAsync(properties =>
+		{
+			properties.Content = content;
+			properties.AllowedMentions = AllowedMentions.None;
+		}, new RequestOptions { CancelToken = lifetime.ApplicationStopping });
 	}
 }
