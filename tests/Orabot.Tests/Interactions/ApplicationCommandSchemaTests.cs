@@ -11,7 +11,7 @@ using Orabot.Tests.Documentation;
 
 namespace Orabot.Tests.Interactions;
 
-/// <summary>Checks the ten retained command definitions directly in Discord.Net's metadata model.</summary>
+/// <summary>Checks retained and migrated commands directly in Discord.Net's metadata model.</summary>
 public sealed class ApplicationCommandSchemaTests
 {
 	[Fact]
@@ -33,6 +33,8 @@ public sealed class ApplicationCommandSchemaTests
 		var commands = framework.SlashCommands.ToDictionary(command => command.Name);
 
 		Assert.Equal(16, commands.Count);
+		Assert.All(framework.SlashCommands, command => Assert.Equal(RunMode.Sync, command.RunMode));
+		Assert.All(framework.ContextCommands, command => Assert.Equal(RunMode.Sync, command.RunMode));
 		Assert.Contains("help", commands.Keys);
 		Assert.Contains("hi", commands.Keys);
 		Assert.Contains("say", commands.Keys);

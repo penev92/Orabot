@@ -1,6 +1,7 @@
 using System.IO;
 using System.Net;
 using Orabot.Bot.Infrastructure.Attachments;
+using Orabot.Bot.Features.GitHubReferences;
 using Orabot.Bot.Discord.BackgroundWork;
 using System;
 using System.Globalization;
@@ -13,7 +14,6 @@ using Discord;
 using Discord.WebSocket;
 using Orabot.Bot.Discord;
 using Orabot.Bot.Features.Quotes;
-using Orabot.Bot.Infrastructure.Configuration;
 using RestSharp;
 using RestSharp.Serializers.Json;
 using System.Net.Http;
@@ -61,7 +61,7 @@ namespace Orabot.Bot.DependencyInjection
 				{
 					var serializationOptions = new JsonSerializerOptions();
 					serializationOptions.Converters.Add(new CustomDateTimeConverter());
-					return new RestClient(new RestClientOptions(),
+					return new RestClient(new RestClientOptions { Timeout = TimeSpan.FromSeconds(15) },
 						configureSerialization: s => s.UseSystemTextJson(serializationOptions));
 				})
 				.AddCommandFeatures(configuration)
@@ -100,8 +100,8 @@ namespace Orabot.Bot.DependencyInjection
 				.Validate(options => !string.IsNullOrWhiteSpace(options.ChannelName), "MapAnnouncer:ChannelName must be configured.")
 				.Validate(options => options.ScanInterval > 0, "MapAnnouncer:ScanInterval must be positive milliseconds.")
 				.ValidateOnStart();
-			services.AddSingleton<IValidateOptions<LegacyFeatureOptions>, LegacyFeatureOptionsValidator>();
-			services.AddOptions<LegacyFeatureOptions>().Bind(configuration).ValidateOnStart();
+			services.AddOptions<GitHubReferenceOptions>().Bind(configuration)
+				.Validate(options => IsHttpUrl(options.GitHubIconsBaseUrl), "GitHubIconsBaseUrl").ValidateOnStart();
 			services.AddOptions<LogOptions>().Bind(configuration)
 				.Validate(options => IsStoragePath(options.LogStorageFolder), "LogStorageFolder").ValidateOnStart();
 			services.AddOptions<ReplayOptions>().Bind(configuration)
@@ -109,7 +109,7 @@ namespace Orabot.Bot.DependencyInjection
 			return services;
 		}
 
-		/// <summary>Registers concrete command services for normal startup and explicit SDK registration.</summary>
+		/// <summary>Registers concrete command dependencies for both bot startup and explicit SDK registration.</summary>
 		public static IServiceCollection AddCommandFeatures(this IServiceCollection services, IConfiguration configuration)
 		{
 			services.AddOptions<TrustedRoleOptions>().Bind(configuration);
@@ -123,11 +123,15 @@ namespace Orabot.Bot.DependencyInjection
 			services.AddHttpClient(AttachmentDownloader.ClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
 				.ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
 				{
-					AllowAutoRedirect = false, AutomaticDecompression = DecompressionMethods.None,
+					AllowAutoRedirect = false,
+					AutomaticDecompression = DecompressionMethods.None,
 					PooledConnectionLifetime = TimeSpan.FromMinutes(5)
 				}).SetHandlerLifetime(Timeout.InfiniteTimeSpan);
 			return services.AddSingleton<AttachmentDownloader>();
 		}
+
+		static bool IsHttpUrl(string value) => Uri.TryCreate(value, UriKind.Absolute, out var uri)
+			&& (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) && !string.IsNullOrEmpty(uri.Host) && string.IsNullOrEmpty(uri.UserInfo);
 
 		static bool IsStoragePath(string value)
 		{

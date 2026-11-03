@@ -1,5 +1,5 @@
 ﻿using System.Collections.Generic;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using RestSharp;
 
 namespace Orabot.Bot.Features.GitHubReferences.Messages
@@ -15,6 +15,6 @@ namespace Orabot.Bot.Features.GitHubReferences.Messages
 			{ "bot", 0 }
 		};
 
-		public OrabotGitHubIssueNumberMessageHandler(IRestClient restClient, IConfiguration configuration) : base(restClient, configuration) { }
+		public OrabotGitHubIssueNumberMessageHandler(IRestClient restClient, IOptions<GitHubReferenceOptions> options) : base(restClient, options) { }
 	}
 }

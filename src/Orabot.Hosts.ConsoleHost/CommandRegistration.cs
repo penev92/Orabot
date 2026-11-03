@@ -61,7 +61,6 @@ namespace Orabot.Hosts.ConsoleHost
 			builder.Services.AddInteractionFramework(client).AddCommandFeatures(builder.Configuration)
 				.AddSingleton(TimeProvider.System);
 			using var host = builder.Build();
-			OrabotConfiguration.Validate(host.Services);
 			var interactions = host.Services.GetRequiredService<InteractionService>();
 			await interactions.AddModulesAsync(typeof(global::Orabot.Bot.Discord.Bot).Assembly, host.Services);
 			cancellationToken.ThrowIfCancellationRequested();

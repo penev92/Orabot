@@ -64,25 +64,16 @@ public sealed class HostConfigurationTests
 	}
 
 	[Fact]
-	public void Invalid_configuration_fails_before_hosted_services_are_constructed()
+	public async Task Invalid_typed_options_stop_normal_host_startup_before_Discord_login()
 	{
 		var values = ValidValues();
 		values["BotToken"] = "";
-		values["MapAnnouncer:ScanInterval"] = "0";
-		var constructed = false;
 		var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
 		builder.Configuration.AddInMemoryCollection(values);
-		builder.Services.AddOrabotOptions(builder.Configuration).AddDocumentationFeature(builder.Configuration);
-		builder.Services.AddSingleton<IHostedService>(_ =>
-		{
-			constructed = true;
-			throw new InvalidOperationException("Must not construct before validation.");
-		});
+		builder.Services.AddOrabot(builder.Configuration);
 		using var host = builder.Build();
-		var error = Assert.Throws<OptionsValidationException>(() => OrabotConfiguration.Validate(host.Services));
+		var error = await Assert.ThrowsAsync<OptionsValidationException>(() => host.StartAsync());
 		Assert.Contains(error.Failures, failure => failure.Contains("BotToken"));
-		Assert.Contains(error.Failures, failure => failure.Contains("MapAnnouncer:ScanInterval"));
-		Assert.False(constructed);
 	}
 
 	[Theory]
@@ -104,7 +95,7 @@ public sealed class HostConfigurationTests
 		var values = ValidValues();
 		values[key] = value;
 		using var services = OptionsServices(values);
-		var error = Assert.Throws<OptionsValidationException>(() => OrabotConfiguration.Validate(services));
+		var error = Assert.Throws<OptionsValidationException>(() => services.GetRequiredService<IStartupValidator>().Validate());
 		Assert.Contains(error.Failures, failure => failure.Contains(key));
 		Assert.DoesNotContain("synthetic-token", error.Message);
 		Assert.DoesNotContain("private-numeric-value", error.Message);
@@ -114,7 +105,7 @@ public sealed class HostConfigurationTests
 	public void Complete_synthetic_configuration_passes_startup_validation()
 	{
 		using var services = OptionsServices(ValidValues());
-		OrabotConfiguration.Validate(services);
+		services.GetRequiredService<IStartupValidator>().Validate();
 		Assert.Equal(100, services.GetRequiredService<IOptions<DiscordBotOptions>>().Value.MessageCacheSize);
 		Assert.Equal(300000, services.GetRequiredService<IOptions<DocumentationCacheOptions>>().Value.ScanInterval);
 	}
@@ -127,7 +118,7 @@ public sealed class HostConfigurationTests
 		builder.Services.AddOrabot(builder.Configuration);
 		using var host = builder.Build();
 		var services = host.Services;
-		OrabotConfiguration.Validate(services);
+		services.GetRequiredService<IStartupValidator>().Validate();
 		var hosted = services.GetServices<IHostedService>().ToArray();
 		Assert.Equal(4, hosted.Length);
 		Assert.IsType<global::Orabot.Bot.Discord.Bot>(hosted[0]);
@@ -138,7 +129,7 @@ public sealed class HostConfigurationTests
 	static ServiceProvider OptionsServices(Dictionary<string, string?> values)
 	{
 		var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
-		return new ServiceCollection().AddLogging().AddOrabotOptions(configuration).AddDocumentationFeature(configuration).BuildServiceProvider();
+		return new ServiceCollection().AddLogging().AddOrabotOptions(configuration).AddCommandFeatures(configuration).BuildServiceProvider();
 	}
 
 	static Dictionary<string, string?> ValidValues()

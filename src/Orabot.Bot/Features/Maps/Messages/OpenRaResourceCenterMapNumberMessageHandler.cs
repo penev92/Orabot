@@ -1,7 +1,7 @@
-using System.Threading;
-using Discord;
 ﻿using System.Collections.Generic;
 using System.Threading.Tasks;
+using Discord;
+using System.Threading;
 using Orabot.Bot.Discord.Messages;
 using Orabot.Bot.Features.Maps.Rendering;
 
@@ -30,9 +30,9 @@ namespace Orabot.Bot.Features.Maps.Messages
 					continue;
 				}
 
-				var embed = await _toEmbedTransformer.CreateEmbed(number);
+				var embed = await _toEmbedTransformer.CreateEmbed(number, cancellationToken);
 				if (embed != null)
-					await message.Channel.SendMessageAsync("", embed: embed);
+					await message.Channel.SendMessageAsync("", embed: embed, allowedMentions: AllowedMentions.None, options: new RequestOptions { CancelToken = cancellationToken });
 			}
 		}
 	}

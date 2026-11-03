@@ -59,7 +59,6 @@ namespace Orabot.Hosts.ConsoleHost
 				});
 				builder.Services.AddOrabot(builder.Configuration);
 				using var host = builder.Build();
-				OrabotConfiguration.Validate(host.Services);
 				var failureState = host.Services.GetRequiredService<WorkerFailureState>();
 				await host.RunAsync();
 				return failureState.HasFailed ? 1 : 0;

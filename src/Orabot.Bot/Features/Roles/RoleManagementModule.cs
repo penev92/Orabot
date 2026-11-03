@@ -1,5 +1,6 @@
 using System;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Discord;
 using Discord.Interactions;
@@ -25,7 +26,9 @@ namespace Orabot.Bot.Features.Roles
 		[SlashCommand("role", "Adds or removes a configured self-assigned role.")]
 		public async Task RoleAsync([Summary("role", "Choose a self-assigned role, or omit it to list allowed roles.")] IRole role = null)
 		{
-			var token = _lifetime.ApplicationStopping;
+			using var budget = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping);
+			budget.CancelAfter(TimeSpan.FromSeconds(10));
+			var token = budget.Token;
 			string response;
 			if (Context.Guild == null)
 				response = "This command is only available in a server.";
